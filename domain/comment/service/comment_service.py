@@ -3,6 +3,7 @@ from collections import defaultdict
 from typing import List, DefaultDict
 import logging
 import time
+from core.kafka.dto.producer_message import CommentSummaryItem
 from domain.comment.model.comment import Comment
 from domain.comment.model.comment_type import CommentType
 from domain.comment.repository.comment_repository import CommentRepository
@@ -20,12 +21,12 @@ class CommentService:
         self.youtube_comment_service = YoutubeCommentService()
         self.report_repository = ReportRepository()
 
-    async def summarize_comments_by_emotions_with_llm(self, comments_by_emotions: DefaultDict[CommentType, list[Comment]]) -> defaultdict[CommentType, List[Comment]]:
-        summarized_comments: defaultdict[CommentType, List[Comment]] = defaultdict(list)
+    async def summarize_comments_by_emotions_with_llm(self, comments_by_emotions: DefaultDict[CommentType, list[Comment]]) -> List[CommentSummaryItem]:
+        result: List[CommentSummaryItem] = []
 
-        summarize_and_save_start = time.time()
-        logger.info("📝 댓글 감정별 요약 및 저장 시작")
-        # 감정별로 요약
+        summarize_start = time.time()
+        logger.info("📝 댓글 감정별 요약 시작")
+
         for emotion, comments in comments_by_emotions.items():
             if not comments:
                 continue
@@ -33,33 +34,22 @@ class CommentService:
             # 해당 감정 그룹의 content만 개행으로 합치기
             contents_str = "\n".join(comment.content for comment in comments)
             # LLM 서비스 호출 -> returns list[str]
-            summarized_contents = self.rag_service.summarize_comments(contents_str, emotion.label, len(comments))
-            
+            summarized_contents = await self.rag_service.summarize_comments(contents_str, emotion.label, len(comments))
 
-            
-            # 요약 내용을 defaultdict에 추가 & DB 저장
-            comments_to_save = []
             for content in summarized_contents:
-                summarized_comment_obj = Comment(
+                result.append(CommentSummaryItem(
                     comment_type=emotion.value,
-                    content=content,
-                    report_id=comments[0].report_id
-                )
-                summarized_comments[emotion].append(summarized_comment_obj)
-                # 딕셔너리로 변환하여 저장
-                comments_to_save.append({
-                    "comment_type": emotion.value,
-                    "content": content,
-                    "report_id": comments[0].report_id
-                })
-            await self.comment_repository.save_bulk(comments_to_save)
-            logger.info("댓글 결과를 PostgreSQL DB에 저장했습니다.")
-        summarize_and_save_time = time.time() - summarize_and_save_start
-        logger.info(f"📝 댓글 감정별 요약 및 저장 완료 ({summarize_and_save_time:.2f}초)")
-        return summarized_comments
+                    content=content
+                ))
+
+            logger.info(f"📝 [{emotion.value}] 요약 완료 - {len(summarized_contents)}개 항목 생성")
+
+        summarize_time = time.time() - summarize_start
+        logger.info(f"📝 댓글 감정별 요약 완료 ({summarize_time:.2f}초) - 총 {len(result)}개 항목")
+        return result
 
     async def classify_comment_with_llm(self, comment: Comment) -> Comment:
-        result = self.rag_service.classify_comment(comment.content)
+        result = await self.rag_service.classify_comment(comment.content)
         # comment의 comment_type 업데이트
         comment.comment_type = result["comment_type"]
         # db 저장 후 반환 -> 그냥 반환
