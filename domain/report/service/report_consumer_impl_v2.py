@@ -5,6 +5,9 @@ import logging
 import time
 from typing import Any, Dict, Optional, Tuple
 
+from core.kafka.kafka_broker import kafka_broker
+from core.kafka.dto.producer_message import Message, Step, OverviewResult, AnalysisResult
+from core.config.kafka_config import kafka_config
 from domain.channel.repository.channel_repository import ChannelRepository
 from domain.comment.service.comment_service import CommentService
 from domain.content_chunk.repository.content_chunk_repository import ContentChunkRepository
@@ -27,8 +30,8 @@ from core.cache.redis_client import RedisService  # 합쳐진 RedisService
 logger = logging.getLogger(__name__)
 
 class ReportConsumerImplV2(ReportConsumer):
-    def __init__(self, broker):
-        super().__init__(broker)
+    def __init__(self, broker, group_id: str = kafka_config.consumer_group_id):
+        super().__init__(broker, group_id=group_id)
         self.rag_service = RagServiceImpl()
         self.video_repository = VideoRepository()
         self.report_repository = ReportRepository()
@@ -141,14 +144,21 @@ class ReportConsumerImplV2(ReportConsumer):
                 })
                 logger.info(f"Task ID {task.id}의 overview_status를 COMPLETED로 업데이트했습니다.")
 
-                # redis 에 완료 메시지 보내기
-                channel = await self.channel_repository.find_by_id(getattr(video, "channel_id", None))
-                user_id = getattr(channel, 'member_id', None)
-
-                await self.redis_service.publish(
-                        user_id=str(user_id),
-                        message=json.dumps({"status": "success", "step": "overview", "report": report.id})
-                    )
+                logger.info(f"Kafka publish 시작: topic={kafka_config.report_result_v3}, report_id={report.id}, task_id={task.id}")
+                await kafka_broker.publish(
+                    Message(
+                        is_success=True,
+                        task_id=task.id,
+                        report_id=report.id,
+                        step=Step.overview,
+                        result=OverviewResult(
+                            summary="summary_test",
+                            comment_analysis="comment_test",
+                        )
+                    ),
+                    topic=kafka_config.report_result_v3
+                )
+                logger.info(f"Kafka publish 완료: topic={kafka_config.report_result_v3}")
 
             await self.create_summary_update(report.id)
 
@@ -161,11 +171,15 @@ class ReportConsumerImplV2(ReportConsumer):
                     "id": task.id,
                     "overview_status": Status.FAILED
                 })
-                await self.redis_service.publish(
-                        user_id=str(user_id),
-                        message=json.dumps({"status": "fail", "step": "overview"})
-                    )
-                logger.info(f"Task ID {task.id}의 overview_status를 FAILED로 업데이트했습니다.")
+                await kafka_broker.publish( 
+                    Message(
+                        is_success=False,
+                        task_id=task.id,
+                        report_id=message.get("report_id"),
+                        step=Step.overview,
+                    ),
+                    topic=kafka_config.report_result_v3
+                )
         finally:
             end_time = time.time()  # 종료 시간 기록
             elapsed_time = end_time - start_time
@@ -177,8 +191,7 @@ class ReportConsumerImplV2(ReportConsumer):
         """보고서 분석 요청 처리"""
         logger.info(f"[V2] Handling analysis request")
         start_time = time.time()  # 시작 시간 기록
-        user_id = None
-        
+
         try:
             # 공통 메서드로 report와 video 정보 조회
             result = await self._get_report_and_video(message)
@@ -215,14 +228,22 @@ class ReportConsumerImplV2(ReportConsumer):
                 })
                 logger.info(f"Task ID {task.id}의 analysis_status를 COMPLETED로 업데이트했습니다.")
                 
-                # redis 에 완료 메시지 보내기
-                channel = await self.channel_repository.find_by_id(getattr(video, "channel_id", None))
-                user_id = getattr(channel, 'member_id', None)
-
-                await self.redis_service.publish(
-                        user_id=str(user_id),
-                        message=json.dumps({"status": "success", "step": "analysis", "report": report.id})
-                    )
+                # Kafka 발행
+                logger.info(f"Kafka publish 시작: topic={kafka_config.report_result_v3}, report_id={report.id}, task_id={task.id}")
+                await kafka_broker.publish(
+                    Message(
+                        is_success=True,
+                        task_id=task.id,
+                        report_id=report.id,
+                        step=Step.analysis,
+                        result=AnalysisResult(
+                            viewer_retention="viewer_test",
+                            optimization="optimization_test",
+                        )
+                    ),
+                    topic=kafka_config.report_result_v3
+                )
+                logger.info(f"Kafka publish 완료: topic={kafka_config.report_result_v3}")
 
             await self.create_summary_update(report.id)
 
@@ -235,13 +256,15 @@ class ReportConsumerImplV2(ReportConsumer):
                     "id": task.id,
                     "analysis_status": Status.FAILED
                 })
-
-                if user_id:
-                    await self.redis_service.publish(
-                            user_id=str(user_id),
-                            message=json.dumps({"status": "fail", "step": "analysis"})
-                        )
-                    logger.info(f"Task ID {task.id}의 analysis_status를 FAILED로 업데이트했습니다.")
+                await kafka_broker.publish(
+                    Message(
+                        is_success=False,
+                        task_id=task.id,
+                        report_id=message.get("report_id"),
+                        step=Step.analysis,
+                    ),
+                    topic=kafka_config.report_result_v3
+                )
         finally:
             end_time = time.time()  # 종료 시간 기록
             elapsed_time = end_time - start_time
