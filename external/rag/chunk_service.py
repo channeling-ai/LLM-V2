@@ -205,7 +205,7 @@ async def create_meaning_chunks_with_focus(
     for attempt in range(retry + 1):
         try:
             query="이 데이터의 내용을 설명해줘"
-            summary = rag_service.execute_llm_chain(context, query, PromptTemplateManager.get_meaning_based_chunk_prompt())
+            summary = await rag_service.execute_llm_chain(context, query, PromptTemplateManager.get_meaning_based_chunk_prompt())
             summary_list = json.loads(summary)
             if isinstance(summary_list, list):
                 break

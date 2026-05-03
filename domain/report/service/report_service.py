@@ -226,7 +226,7 @@ class ReportService:
         
         try:
             # 1. 실시간 트렌드 분석
-            realtime_keyword = self.rag_service.analyze_realtime_trends()
+            realtime_keyword = await self.rag_service.analyze_realtime_trends()
             
             # 2. 채널 정보 조회
             channel_id = getattr(video, "channel_id", None)
@@ -241,7 +241,7 @@ class ReportService:
             channel_concept = getattr(channel, "concept", "")
             target_audience = getattr(channel, "target", "")
             
-            channel_keyword = self.rag_service.analyze_channel_trends(
+            channel_keyword = await self.rag_service.analyze_channel_trends(
                 channel_concept=channel_concept,
                 target_audience=target_audience
             )
