@@ -7,7 +7,7 @@ from core.kafka.kafka_broker import kafka_broker
 from core.kafka.dto.producer_message import (
     Message, Step, OverviewResult, AnalysisResult,
     ScriptSection, Metrics, CommentAnalysis, RepresentativeComment, ReportSummary,
-)  # ScriptSection, Metrics, CommentAnalysis, RepresentativeComment, ReportSummary: overview 전용
+)
 from core.config.kafka_config import kafka_config
 from domain.channel.repository.channel_repository import ChannelRepository
 from domain.comment.service.comment_service import CommentService

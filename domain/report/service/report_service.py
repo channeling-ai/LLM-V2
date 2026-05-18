@@ -1,14 +1,10 @@
-import asyncio
 import json
 import logging
 import time
-from typing import DefaultDict, List
 
 from core.enums.source_type import SourceTypeEnum
 from domain.channel.repository.channel_repository import ChannelRepository
-from domain.comment.model.comment import Comment
 from domain.content_chunk.repository.content_chunk_repository import ContentChunkRepository
-from domain.log.repository.report_log_repository import ReportLogRepository
 from domain.report.repository.report_repository import ReportRepository
 from domain.trend_keyword.model.trend_keyword_type import TrendKeywordType
 from domain.trend_keyword.repository.trend_keyword_repository import TrendKeywordRepository
@@ -27,64 +23,29 @@ class ReportService:
         self.rag_service = RagServiceImpl()
         self.report_log_repository = ReportLogRepository()
 
-    async def create_summary(self, video: Video, report_id: int, skip_vector_save: bool = False) -> bool:
+    async def create_summary(self, video: Video, report_id: int, skip_vector_save: bool = False) -> list:
         """
-        영상 요약을 생성하고 Vector DB와 PostgreSQL에 저장
-        
-        Args:
-            video: 비디오 객체
-            report_id: 리포트 ID
-            skip_vector_save: Vector DB 저장 스킵 여부 (기본값: False)
-            
-        Returns:
-            성공 시 True, 실패 시 False
+        영상 스크립트 요약 생성 (JSON 배열 반환)
+        벡터 DB 저장만 담당 — PostgreSQL 저장은 Spring(Kafka 결과 수신 후)에서 처리
         """
         start_time = time.time()
-        logger.info(f"📄 요약 생성 시작 - Report ID: {report_id}")
-        
-        try:
-            # 유튜브 영상 아이디 조회
-            youtube_video_id = getattr(video, "youtube_video_id", None)
-            if not youtube_video_id:
-                logger.error("YouTube 영상 ID가 없습니다.")
-                return False
-            
-            # 요약 생성 (LLM API 호출, Redis 캐싱 적용)
-            summary_start = time.time()
-            summary = await self.rag_service.summarize_video(youtube_video_id)
-            summary_time = time.time() - summary_start
-            logger.info(f"🤖 LLM API 요약 생성 완료 ({summary_time:.2f}초)")
-            logger.info("요약 결과:\n%s", summary[:100])
-            
-            # 벡터 DB에 저장 (skip_vector_save가 False인 경우만)
-            if not skip_vector_save:
-                await self.content_chunk_repository.save_context(
-                    source_type=SourceTypeEnum.VIDEO_SUMMARY,
-                    source_id=report_id,
-                    context=summary
-                )
-                logger.info("요약 결과를 벡터 DB에 저장했습니다.")
-            else:
-                logger.info("[V2] 벡터 DB 저장을 스킵했습니다.")
-            
-            # PostgreSQL에 저장
-            pg_start = time.time()
-            await self.report_repository.save({
-                "id": report_id,
-                "summary": summary,
-                "title": video.title
-            })
-            pg_time = time.time() - pg_start
-            logger.info(f"🗄️ PostgreSQL DB 저장 완료 ({pg_time:.2f}초)")
-            
-            total_time = time.time() - start_time
-            logger.info(f"📄 요약 생성 전체 완료 ({total_time:.2f}초)")
-            return True
-            
-        except Exception as e:
-            total_time = time.time() - start_time
-            logger.error(f"📄 요약 생성 실패 ({total_time:.2f}초): {e}")
-            raise
+        logger.info("스크립트 요약 생성 시작 - Report ID: %d", report_id)
+
+        youtube_video_id = getattr(video, "youtube_video_id", None)
+        if not youtube_video_id:
+            raise ValueError("YouTube 영상 ID가 없습니다.")
+
+        summary = await self.rag_service.summarize_video(youtube_video_id)
+        logger.info("스크립트 요약 완료 - %d 구간 (%.2f초)", len(summary), time.time() - start_time)
+
+        if not skip_vector_save and summary:
+            await self.content_chunk_repository.save_context(
+                source_type=SourceTypeEnum.VIDEO_SUMMARY,
+                source_id=report_id,
+                context=json.dumps(summary, ensure_ascii=False),
+            )
+
+        return summary
 
     async def analyze_viewer_retention(self, video: Video, report_id: int, token: str, skip_vector_save: bool = False) -> bool:
         """
@@ -297,43 +258,3 @@ class ReportService:
             logger.error(f"📊 트렌드 분석 실패 ({total_time:.2f}초): {e}")
             raise
 
-    async def update_report_emotion_counts(self, report_id: int, comment_dict:DefaultDict[str,List[Comment]]) -> bool:
-        """
-        성공 시 True, 실패 시 False를 반환합니다.
-        """
-        count_dict = {comment_type: len(comments) for comment_type, comments in comment_dict.items()}
-        logger.info("댓글 개수를 PostgreSQL DB에 저장합니다.")
-        return await self.report_repository.update_count(report_id, count_dict)
-
-    async def summarize_update_changes(self, report_id: int) -> bool:
-        """
-        리포트 업데이트 시 변경점 요약 생성
-        """
-        logger.info(f"🔄 업데이트 요약 생성 시작 - Report ID: {report_id}")
-
-        try:
-            # 1. 현재 리포트 조회
-            current_report = await self.report_repository.find_by_id(report_id)
-            if not current_report:
-                logger.error(f"Report {report_id} not found.")
-                return False
-
-            # 2. 이전 리포트 로그 조회 (가장 최근 것)
-            prev_log = await self.report_log_repository.find_by_video_for_update(current_report.video_id)
-
-            if not prev_log:
-                logger.info("이전 리포트 로그가 없어 업데이트 요약을 생략합니다.")
-                return True
-
-            # 3. 변경점 요약 생성 요청 (Service -> RAG Service)
-            update_summary_text = await self.rag_service.create_update_summary(prev_log, current_report)
-
-            # 4. 결과 저장
-            current_report.update_summary = update_summary_text
-            await self.report_repository.save({"id": current_report.id, "update_summary": update_summary_text})
-
-            return True
-
-        except Exception as e:
-            logger.error(f"❌ 업데이트 요약 생성 실패: {e}")
-            return False
