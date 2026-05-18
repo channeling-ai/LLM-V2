@@ -27,8 +27,8 @@ class PromptTemplateManager:
     
     @staticmethod
     def get_batch_comment_classification_prompt() -> str:
-        “””댓글 배치 분류용 프롬프트 템플릿 (최대 20개 한 번에)”””
-        return “””
+        # 댓글 배치 분류용 프롬프트 템플릿 (최대 20개 한 번에)
+        return """
 당신은 유튜브 댓글 감정 분류 전문 AI입니다.
 제공된 댓글 배열의 각 항목을 긍정/부정/중립/조언 중 하나로 분류하세요.
 
@@ -51,12 +51,12 @@ class PromptTemplateManager:
 
 질문: {input}
 문서 내용: {context}
-답변:”””.strip()
+답변:""".strip()
 
     @staticmethod
     def get_category_summary_prompt() -> str:
-        “””4개 카테고리 한줄 요약 통합 프롬프트 (1회 호출)”””
-        return “””
+        # 4개 카테고리 한줄 요약 통합 프롬프트 (1회 호출)
+        return """
 당신은 유튜브 댓글 분석 전문 AI입니다.
 분류된 댓글 데이터를 바탕으로 긍정/부정/중립/조언 각 카테고리별 한줄 요약을 작성하세요.
 
@@ -75,7 +75,7 @@ class PromptTemplateManager:
 
 질문: {input}
 문서 내용: {context}
-답변:”””.strip()
+답변:""".strip()
 
     @staticmethod
     def get_video_evaluation_prompt() -> str:

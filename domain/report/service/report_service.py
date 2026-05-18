@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -21,7 +22,6 @@ class ReportService:
         self.trend_keyword_repository = TrendKeywordRepository()
         self.channel_repository = ChannelRepository()
         self.rag_service = RagServiceImpl()
-        self.report_log_repository = ReportLogRepository()
 
     async def create_summary(self, video: Video, report_id: int, skip_vector_save: bool = False) -> list:
         """

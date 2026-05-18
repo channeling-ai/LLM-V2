@@ -53,8 +53,3 @@ class RagService(ABC):
     def analyze_channel_trends(self, channel_concept: str, target_audience: str) -> Dict:
         """채널 맞춤형 트렌드 분석"""
         pass
-
-    @abstractmethod
-    def create_update_summary(self, prev_report: ReportLog, curr_report: Report):
-        """업데이트 변경사항 요약"""
-        pass
