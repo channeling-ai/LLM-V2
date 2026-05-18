@@ -17,8 +17,6 @@ from domain.channel.model.channel import Channel
 from domain.comment.model.comment_type import CommentType
 from domain.content_chunk.repository.content_chunk_repository import ContentChunkRepository
 from domain.idea.dto.idea_dto import IdeaRequest
-from domain.log.model.report_log import ReportLog
-from domain.report.model.report import Report
 from domain.trend_keyword.model.trend_keyword import TrendKeyword
 from external.rag.rag_service import RagService
 from external.youtube.transcript_service import TranscriptService
@@ -40,19 +38,91 @@ class RagServiceImpl(RagService):
         self.youtube_video_service = VideoService()
         self.llm = ChatOpenAI(model="gpt-4o-mini")
     
-    async def summarize_video(self, video_id: str) -> str:
+    async def summarize_video(self, video_id: str) -> List[Dict[str, Any]]:
         context = await self.transcript_service.get_formatted_transcript(video_id)
-        print("정리된 자막 = ", context[:100])
-        print()
+        logger.info("정리된 자막 = %s", context[:100] if context else "없음")
 
-
-        # 자막이 없는 경우 바로 메시지 반환
         if not context or context.strip() == "":
-            return "자막을 불러올 수 없는 영상입니다."
+            return []
 
-        query = "유튜브 영상 자막을 기반으로 10초 단위 개요를 위의 형식에 따라 작성해주세요."
-        return await self.execute_llm_chain(context, query, PromptTemplateManager.get_video_summary_prompt())
+        query = "유튜브 영상 자막을 내용 흐름 기준으로 구간별 JSON 배열로 작성해주세요."
+        result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_video_summary_prompt())
+
+        try:
+            clean = result.strip().replace("```json", "").replace("```", "")
+            return json.loads(clean)
+        except json.JSONDecodeError as e:
+            logger.error("스크립트 요약 JSON 파싱 오류: %s, 원본: %s", e, result[:200])
+            return []
     
+    async def classify_comments_batch(self, comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """댓글 배치 분류 (최대 20개 한 번에) - [{index, content}] → [{index, emotion}]"""
+        context = json.dumps(comments, ensure_ascii=False)
+        query = "각 댓글의 감정을 긍정(1)/부정(2)/중립(3)/조언(4)으로 분류해주세요."
+        result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_batch_comment_classification_prompt())
+
+        try:
+            clean = result.strip().replace("```json", "").replace("```", "")
+            return json.loads(clean)
+        except json.JSONDecodeError as e:
+            logger.error("배치 댓글 분류 JSON 파싱 오류: %s", e)
+            return [{"index": c["index"], "emotion": 3} for c in comments]
+
+    async def summarize_comment_categories(self, classified_comments: Dict[str, List[str]]) -> Dict[str, str]:
+        """4개 카테고리 한줄 요약 - 1회 LLM 호출"""
+        context = json.dumps(classified_comments, ensure_ascii=False)
+        query = "각 카테고리 댓글들의 핵심 반응을 한줄로 요약해주세요."
+        result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_category_summary_prompt())
+
+        try:
+            clean = result.strip().replace("```json", "").replace("```", "")
+            return json.loads(clean)
+        except json.JSONDecodeError as e:
+            logger.error("카테고리 요약 JSON 파싱 오류: %s", e)
+            return {"positive": "", "negative": "", "neutral": "", "advice": ""}
+
+    async def evaluate_seo_qualitative(self, video_details: Dict[str, Any]) -> Dict[str, Any]:
+        """SEO 정성평가 - 제목/설명/태그 품질 점수 (0~50점)"""
+        context = json.dumps({
+            "title": video_details.get("title", ""),
+            "description": video_details.get("description", "")[:500],
+            "tags": video_details.get("tags", []),
+        }, ensure_ascii=False)
+        query = "영상 메타데이터의 SEO 정성 점수를 평가해주세요."
+        result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_seo_qualitative_prompt())
+
+        try:
+            clean = result.strip().replace("```json", "").replace("```", "")
+            return json.loads(clean)
+        except json.JSONDecodeError as e:
+            logger.error("SEO 정성평가 JSON 파싱 오류: %s", e)
+            return {"score": 0, "breakdown": {"title": 0, "description": 0, "tags": 0}}
+
+    async def generate_overview_summary(
+        self,
+        metrics: Dict[str, Any],
+        comment_analysis: Dict[str, Any],
+        previous_report: Any = None,
+    ) -> Dict[str, str]:
+        """overview_summary 생성 - 지표 + 댓글 기반"""
+        data: Dict[str, Any] = {"metrics": metrics, "comment_analysis": comment_analysis}
+        if previous_report:
+            data["previous_report"] = {
+                "view": getattr(previous_report, "view", None),
+                "positive_pct": getattr(previous_report, "positive_comment", None),
+                "seo": getattr(previous_report, "seo", None),
+            }
+        context = json.dumps(data, ensure_ascii=False, default=str)
+        query = "영상 지표와 댓글 분석을 바탕으로 overview 요약을 작성해주세요."
+        result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_overview_summary_prompt())
+
+        try:
+            clean = result.strip().replace("```json", "").replace("```", "")
+            return json.loads(clean)
+        except json.JSONDecodeError as e:
+            logger.error("overview_summary JSON 파싱 오류: %s", e)
+            return {"title": "", "content": "", "tag": "부정"}
+
     async def classify_comment(self, comment: str) -> Dict[str, Any]:
         query = "유튜브 댓글을 분석하여 감정을 분류하고 백틱(```)이나 설명 없이 순수 JSON으로 출력해주세요."
         result = await self.execute_llm_chain(comment, query, PromptTemplateManager.get_comment_reaction_prompt())
@@ -449,72 +519,3 @@ class RagServiceImpl(RagService):
         result = await self.llm.ainvoke(prompt)
         return result.content
 
-    async def create_update_summary(self, prev_report: ReportLog, curr_report: Report):
-        """
-        리포트 업데이트 시 변경점 요약 생성
-        """
-
-        try:
-            # 1. 데이터 가공 헬퍼 함수 (내부 정의)
-            def safe_get(val, default=0):
-                return val if val is not None else default
-
-            def summarize_text(text):
-                return text[:100] + "..." if text and len(text) > 100 else (text or "내용 없음")
-
-            def calc_diff_msg(val, avg):
-                if val is None or avg is None or avg == 0:
-                    return "정보 없음"
-                diff = val - avg
-                if isinstance(val, float) or isinstance(avg, float):
-                    return f"{'+' if diff > 0 else ''}{diff:.2f}"  # 소수점 2자리까지 표현
-                else:
-                    return f"{'+' if diff > 0 else ''}{int(diff)}"
-
-            # 2. 템플릿에 전달할 데이터 준비 (dict 변환)
-            template_data = {
-                "title": curr_report.title,
-
-                # 이전 데이터
-                "prev_view": safe_get(prev_report.view),
-                "prev_view_diff": calc_diff_msg(prev_report.view, prev_report.view_channel_avg),
-                "prev_like": safe_get(prev_report.like_count),
-                "prev_comment": safe_get(prev_report.comment),
-                "prev_pos": safe_get(prev_report.positive_comment),
-                "prev_neg": safe_get(prev_report.negative_comment),
-                "prev_concept": safe_get(prev_report.concept),
-                "prev_seo": safe_get(prev_report.seo),
-                "prev_revisit": safe_get(prev_report.revisit),
-                "prev_leave": summarize_text(prev_report.leave_analyze),
-
-                # 현재 데이터
-                "curr_view": safe_get(curr_report.view),
-                "curr_view_diff": calc_diff_msg(curr_report.view, curr_report.view_channel_avg),
-                "curr_like": safe_get(curr_report.like_count),
-                "curr_comment": safe_get(curr_report.comment),
-                "curr_pos": safe_get(curr_report.positive_comment),
-                "curr_neg": safe_get(curr_report.negative_comment),
-                "curr_concept": safe_get(curr_report.concept),
-                "curr_seo": safe_get(curr_report.seo),
-                "curr_revisit": safe_get(curr_report.revisit),
-                "curr_leave": summarize_text(curr_report.leave_analyze),
-            }
-
-            # 탬플릿 생성
-            update_summary_prompt = PromptTemplateManager.summarize_update_changes(template_data)
-
-            # 4. LLM 실행
-            llm_start = time.time()
-            logger.info("🤖 업데이트 요약 LLM 실행 중...")
-
-            response = await self.llm.ainvoke(update_summary_prompt)
-            update_summary_text = response.content # 객체에서 문자열 추출
-
-            llm_time = time.time() - llm_start
-            logger.info(f"🤖 업데이트 요약 LLM 실행 완료 ({llm_time:.2f}초)")
-
-            return update_summary_text
-
-        except Exception as e:
-            logger.error(f"❌ 업데이트 요약 생성 실패: {e}")
-            raise e
