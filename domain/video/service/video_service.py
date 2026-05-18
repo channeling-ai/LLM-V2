@@ -1,20 +1,18 @@
 import logging
-from decimal import Decimal, ROUND_DOWN
+from typing import Optional
 
 import isodate
-
 import numpy as np
 
-from core.enums.avg_type import AvgType
 from domain.content_chunk.repository.content_chunk_repository import ContentChunkRepository
 from domain.video.model.video import Video
 from domain.video.repository.video_repository import VideoRepository
-from domain.report.repository.report_repository import ReportRepository
 import external.youtube.analytics_service as analytics_service
 from external.youtube.video_detail_service import VideoDetailService
-import logging
+from external.rag.rag_service_impl import RagServiceImpl
 
 logger = logging.getLogger(__name__)
+
 
 class VideoService:
 
@@ -22,265 +20,127 @@ class VideoService:
         self.video_repository = VideoRepository()
         self.content_chunk_repository = ContentChunkRepository()
         self.youtube_video_detail_service = VideoDetailService()
-        self.report_repository = ReportRepository()
+        self.rag_service = RagServiceImpl()
 
-
-    async def get_overview_rating(self, video: Video, access_token: str):
-        video_analytics = await analytics_service.get_youtube_analytics_data(
-            access_token =access_token,
-            video_id = video.youtube_video_id,
-            metrics = 'views,averageViewDuration,likes,shares,subscribersGained'
+    async def analyze_metrics(
+        self,
+        video: Video,
+        report_id: int,
+        access_token: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> dict:
+        """
+        영상 수치 지표 분석
+        Returns: metrics dict (Kafka 결과 메시지용)
+        """
+        analytics_data, concept_score = await self._gather_base_data(
+            video, access_token, start_date, end_date
         )
 
         video_detail = await self.youtube_video_detail_service.get_video_details(video.youtube_video_id)
-        google_result = video_analytics['rows'][0]
+        channel_avgs = await self._get_channel_averages(video)
 
-        analytics_data = {
-            "views": google_result[0],  # 조회수
-            "average_view_duration": google_result[1],  # 평균시청길이
-            "likes": google_result[2],  # 좋아요수
-            "shares": google_result[3],  # 공유수
-            "subscribers_gained": google_result[4],  # 구독증가율
-        }
-
-        concept = await self._analyze_consistency(video) # 유사도
-        seo = await self._analyze_seo(video, analytics_data, video_detail) # SEO 분석
-        revisit = await self._analyze_revisit(video,analytics_data) # 재방문률
-        avg_dic = await self._get_rating_avg(video) # 채널/토픽(카테고리)별 평균
+        seo = await self._calculate_seo(analytics_data, video_detail, video)
+        revisit = self._calculate_revisit(video, analytics_data)
 
         return {
-            "concept" : concept,
-            "seo" : seo,
-            "revisit" : revisit,
             "view": video.view,
-            "view_avg": avg_dic['view_avg'],
-            "view_category_avg": avg_dic['view_category_avg'],
-            "like": video.like_count,
-            "like_avg": avg_dic['like_avg'],
-            "like_category_avg": avg_dic['like_category_avg'],
-            "comment": video.comment_count,
-            "comment_avg": avg_dic['comment_avg'],
-            "comment_category_avg": avg_dic['comment_category_avg'],
+            "view_channel_avg": channel_avgs["view_avg"],
+            "like_count": video.like_count,
+            "like_channel_avg": channel_avgs["like_avg"],
+            "comment_count": video.comment_count,
+            "comment_channel_avg": channel_avgs["comment_avg"],
+            "concept": round(concept_score, 1),
+            "seo": seo,
+            "revisit": revisit,
         }
 
-    """
-    유사도 계산
-    - 채널 내 다른 영상들과의 유사도를 계산하여 일관성 점수 반환
-    """
-    async def _analyze_consistency(self, video: Video):
-        # 채널 내 모든 영상 조회 (영상이 없다면 유사도 100으로 처리)
+    async def _gather_base_data(self, video: Video, access_token: str, start_date, end_date):
+        """Analytics API 호출 + concept 계산 병렬 실행"""
+        import asyncio
+        return await asyncio.gather(
+            analytics_service.get_youtube_analytics_data(
+                access_token=access_token,
+                video_id=video.youtube_video_id,
+                metrics="views,averageViewDuration,likes,shares,subscribersGained,impressionClickThroughRate",
+                start_date=start_date,
+                end_date=end_date,
+            ),
+            self._analyze_concept(video),
+        )
+
+    async def _analyze_concept(self, video: Video) -> float:
+        """채널 일관성 — 제목+설명+태그 임베딩 코사인 유사도 (현재 영상 제외)"""
         videos = await self.video_repository.find_by_channel_id(video.channel_id)
         other_videos = [v for v in videos if v.id != video.id]
 
-        if (other_videos is None) or (len(other_videos) == 0):
-            return 100
+        if not other_videos:
+            return 100.0
 
-        # 1. 대상 비디오의 임베딩
-        target_video_text = f"{video.title} {video.description}"
-        target_embedding = await self.content_chunk_repository.generate_embedding(target_video_text)
+        target_text = f"{video.title} {video.description}"
+        target_embedding = await self.content_chunk_repository.generate_embedding(target_text)
 
-        # 2. 다른 영상들의 임베딩
-        other_videos_texts = [f"{v.title} {v.description}" for v in other_videos]
-        other_embeddings = []
-        for text in other_videos_texts:
-            embedding = await self.content_chunk_repository.generate_embedding(text)
-            other_embeddings.append(embedding)
+        scores = []
+        for v in other_videos:
+            other_text = f"{v.title} {v.description}"
+            other_embedding = await self.content_chunk_repository.generate_embedding(other_text)
+            dot = np.dot(target_embedding, other_embedding)
+            norm = np.linalg.norm(target_embedding) * np.linalg.norm(other_embedding)
+            scores.append(dot / norm if norm != 0 else 0)
 
-        # 3. 코사인 유사도 계산 (NumPy 사용)
-        similarity_scores = []
-        for other_embedding in other_embeddings:
-            # 코사인 유사도 = (A·B) / (||A|| * ||B||)
-            dot_product = np.dot(target_embedding, other_embedding)
-            norm_target = np.linalg.norm(target_embedding)
-            norm_other = np.linalg.norm(other_embedding)
-            
-            if norm_target == 0 or norm_other == 0:
-                similarity = 0
-            else:
-                similarity = dot_product / (norm_target * norm_other)
-            similarity_scores.append(similarity)
+        return float(np.mean(scores) * 100)
 
-        # 4. 평균 유사도 점수 계산
-        average_similarity = np.mean(similarity_scores)
-        consistency_score = average_similarity * 100
-        return round(consistency_score, 0)
+    async def _calculate_seo(self, analytics_data: dict, video_detail: dict, video: Video) -> float:
+        """SEO 하이브리드 점수 (수치 50점 + 정성 50점)"""
+        numeric_score = self._calculate_seo_numeric(analytics_data, video_detail)
+        qualitative = await self.rag_service.evaluate_seo_qualitative(video_detail)
+        qualitative_score = qualitative.get("score", 0)
+        return round(numeric_score + qualitative_score, 1)
 
+    def _calculate_seo_numeric(self, analytics_data: dict, video_detail: dict) -> float:
+        """수치 기반 SEO 점수 (0~50점): CTR + 시청지속률"""
+        rows = analytics_data.get("rows", [[]])
+        if not rows:
+            return 0.0
 
-    """
-    SEO 분석 
-    - 조회수 대비 시청지속시간, 좋아요, 공유, 구독자증가율을 기반으로 SEO 점수 계산
-    """
-    async def _analyze_seo(self, video: Video, analytics_data: dict, video_detail: dict):
-        delta = isodate.parse_duration(video_detail.get('duration'))
-        total_duration = delta.total_seconds()
+        row = rows[0]
+        avg_view_duration = row[1] if len(row) > 1 else 0
+        ctr = row[5] if len(row) > 5 else 0  # impressionClickThroughRate
 
-        views = analytics_data['views']
-        if views == 0:
-            return 0  # TODO 조회수가 0인 경우 처리
+        duration_str = video_detail.get("duration", "PT0S")
+        try:
+            total_seconds = isodate.parse_duration(duration_str).total_seconds()
+        except Exception:
+            total_seconds = 1
 
-        # 1. 조회수 대비 참여율 계산
-        likes_per_1000_views = (video.like_count or 0) / views * 1000
+        watch_ratio = min(avg_view_duration / total_seconds, 1.0) if total_seconds else 0
+        ctr_normalized = min(ctr / 10.0, 1.0)  # CTR 10%를 만점 기준
 
-        shares_per_1000_views = (analytics_data["shares"] or 0) / views * 1000
+        # 시청지속률 30점 + CTR 20점
+        return round(watch_ratio * 30 + ctr_normalized * 20, 1)
 
-        subscribers_gained_per_1000_views = (analytics_data["subscribers_gained"] or 0) / views * 1000
-
-        # 2. 목표 수치 기준 정규화
-        TARGETS = {
-            "likes_per_1000_views": 30,  # 1000회 조회당 좋아요 30개 목표
-            "shares_per_1000_views": 5,  # 1000회 조회당 공유 5개 목표
-            "subscribers_per_1000_views": 5,  # 1000회 조회당 구독자 5명 목표
-        }
-
-        logging.info("6")
-
-
-        normalized_scores = {
-            "duration": min((analytics_data["average_view_duration"] or 0) / total_duration, 1.0),
-            "likes_rate": min(likes_per_1000_views / TARGETS["likes_per_1000_views"], 1.0),
-            "shares_rate": min(shares_per_1000_views / TARGETS["shares_per_1000_views"], 1.0),
-            "subscribers_rate": min(subscribers_gained_per_1000_views / TARGETS["subscribers_per_1000_views"], 1.0),
-        }
-
-        logging.info(f"제발 {normalized_scores}")
-
-        # 3. 항목별 가중치
-        WEIGHTS = {
-            "duration": 50,
-            "likes_rate": 15,
-            "shares_rate": 15,
-            "subscribers_rate": 20,
-        }
-
-        final_scores = {}
-        total_score = 0
-
-        for key, weight in WEIGHTS.items():
-            score = normalized_scores.get(key, 0) * weight
-            final_scores[f"{key}_score"] = round(score, 0)
-            total_score += score
-
-        return round(total_score, 1)
-
-    """
-    재방문률 분석 (좋아요 + 공유 + 구독) / (조회수)
-    """
-    async def _analyze_revisit(self, video: Video, analytics_data):
-        # 조회수 대비 (좋아요 + 공유 + 구독)
-        if video.view == 0:
-            return 0
-
-        revisit = ((video.like_count or 0) + (analytics_data["shares"] or 0) + (analytics_data["subscribers_gained"] or 0)) / video.view
+    def _calculate_revisit(self, video: Video, analytics_data: dict) -> float:
+        """재방문률 = (좋아요 + 공유 + 구독) / 조회수"""
+        if not video.view:
+            return 0.0
+        rows = analytics_data.get("rows", [[]])
+        row = rows[0] if rows else []
+        shares = row[3] if len(row) > 3 else 0
+        subscribers_gained = row[4] if len(row) > 4 else 0
+        revisit = ((video.like_count or 0) + shares + subscribers_gained) / video.view
         return round(revisit * 100, 2)
 
-    """
-    채널/토픽(카테고리별) 평균 조회수
-    """
-    async def _get_rating_avg(self, video: Video):
-
-        # 채널 내 전체 영상 조회
+    async def _get_channel_averages(self, video: Video) -> dict:
+        """채널 내 평균값 (현재 영상 제외)"""
         videos = await self.video_repository.find_by_channel_id(video.channel_id)
-        category_videos = [v for v in videos if v.video_category == video.video_category]
+        others = [v for v in videos if v.id != video.id]
 
-        if len(videos) == 1 :
-            return {
-                "view_avg": 0,
-                "view_category_avg": 0,
-                "like_avg": 0,
-                "like_category_avg": 0,
-                "comment_avg": 0,
-                "comment_category_avg": 0
-            }
-
-        # 조회수 - 평균 대비 비율
-        logger.info(f"비디오 아이디 {video.id} 조회수 평균")
-        view_avg = sum(v.view for v in videos) / len(videos)
-        view_avg = await self._per(video.view, view_avg)
-
-        # 조회수 - 카테고리별 평균 대비 비율
-        logger.info("조회수 카테고리 평균")
-        view_category_videos = sum(v.view for v in category_videos)
-        view_category_avg = view_category_videos / len(category_videos)
-        view_category_per = await self._per(video.view, view_category_avg)
-
-        # 좋아요수 - 평균 대비 비율
-        logger.info("좋아요수 평균")
-        like_avg = sum(v.like_count for v in videos) / len(videos)
-        like_avg = await self._per(video.like_count, like_avg)
-
-        # 좋아요수 - 카테고리별 평균 대비 비율
-        logger.info("좋아요수 카테고리 평균")
-        like_category_videos = sum(v.like_count for v in category_videos)
-        like_category_avg = like_category_videos / len(category_videos)
-        like_category_per = await self._per(video.like_count, like_category_avg)
-
-        # 댓글수 - 평균 대비 비율
-        logger.info("댓글수 평균")
-        comment_avg = sum(v.comment_count for v in videos) / len(videos)
-        comment_avg = await self._per(video.comment_count, comment_avg)
-
-        # 댓글수 - 카테고리별 평균 대비 비율
-        logger.info("댓글수 카테고리 평균")
-        comment_category_videos = sum(v.comment_count for v in category_videos)
-        comment_category_avg = comment_category_videos / len(category_videos)
-        comment_category_per = await self._per(video.comment_count, comment_category_avg)
+        if not others:
+            return {"view_avg": 0.0, "like_avg": 0.0, "comment_avg": 0.0}
 
         return {
-            "view_avg": view_avg,
-            "view_category_avg": view_category_per,
-            "like_avg": like_avg,
-            "like_category_avg": like_category_per,
-            "comment_avg": comment_avg,
-            "comment_category_avg": comment_category_per
+            "view_avg": round(sum(v.view for v in others) / len(others), 1),
+            "like_avg": round(sum(v.like_count for v in others) / len(others), 1),
+            "comment_avg": round(sum(v.comment_count for v in others) / len(others), 1),
         }
-
-
-    # 평균 대비 증감률 : 평균 대비 퍼센트 아님
-    # 증감률 = (대상값 - 평균값) / 평균값
-    async def _per(self, target, avg):
-        logger.info(f"평균 {avg} / 대상 {target}")
-        ratio_avg = (target-avg) / avg if avg != 0 else 0
-        number = Decimal(ratio_avg*100).quantize(Decimal('0.01'), rounding=ROUND_DOWN) # 반올림 / 내림하지 않고 그대로 소수점을 나타내기 위함
-        return number
-
-
-    async def analyze_metrics(self, video: Video, report_id: int, access_token: str) -> bool:
-        """
-        영상의 수치 정보를 분석하고 리포트에 저장
-        
-        Args:
-            video: 비디오 객체
-            report_id: 리포트 ID
-            access_token: Google 액세스 토큰
-            
-        Returns:
-            성공 시 True, 실패 시 False
-        """
-        try:
-            # 영상 평가 정보 조회
-            avg_dic = await self.get_overview_rating(video, access_token)
-            logger.info("영상 평가 정보:\n%s", avg_dic)
-            
-            # 리포트 업데이트
-            await self.report_repository.save({
-                "id": report_id,
-                # 영상 평가
-                "like_count": video.like_count,
-                "like_channel_avg": avg_dic['like_category_avg'],
-                "like_topic_avg": avg_dic['like_avg'],
-                "comment" : video.comment_count,
-                "comment_channel_avg": avg_dic['comment_category_avg'],
-                "comment_topic_avg": avg_dic['comment_avg'],
-                "view" : video.view,
-                "view_channel_avg": avg_dic['view_avg'],
-                "view_topic_avg": avg_dic['view_category_avg'],
-                "concept" : avg_dic['concept'],
-                "seo" : avg_dic['seo'],
-                "revisit" : avg_dic['revisit'],
-            })
-            logger.info("보고서 정보를 PostgreSQL DB에 저장했습니다.")
-            
-            return True
-            
-        except Exception as e:
-            raise
