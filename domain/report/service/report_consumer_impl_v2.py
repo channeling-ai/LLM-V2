@@ -8,6 +8,7 @@ from core.kafka.dto.producer_message import (
     Message, Step, OverviewResult, AnalysisResult,
     ScriptSection, Metrics, CommentAnalysis, RepresentativeComment, ReportSummary,
 )
+from core.enums.report_tag import OverviewTag, SeoTag
 from core.config.kafka_config import kafka_config
 from domain.channel.repository.channel_repository import ChannelRepository
 from domain.comment.service.comment_service import CommentService
@@ -93,16 +94,27 @@ class ReportConsumerImplV2(ReportConsumer):
 
             # overview_summary 생성 (태그는 규칙 기반)
             positive_pct = comment_analysis.get("positive_pct", 0)
-            tag = "긍정" if positive_pct >= 50 else "부정"
-            raw_summary = await self.rag_service.generate_overview_summary(
-                metrics=metrics,
-                comment_analysis=comment_analysis,
-                previous_report=previous_report,
+            tag = OverviewTag.POSITIVE if positive_pct >= 50 else OverviewTag.NEGATIVE
+            raw_overview, raw_seo = await asyncio.gather(
+                self.rag_service.generate_overview_summary(
+                    metrics=metrics,
+                    comment_analysis=comment_analysis,
+                    previous_report=previous_report,
+                ),
+                self.rag_service.generate_seo_summary(
+                    seo_score=metrics.get("seo", 0),
+                ),
             )
             overview_summary = ReportSummary(
-                title=raw_summary.get("title", ""),
-                content=raw_summary.get("content", ""),
+                title=raw_overview.get("title", ""),
+                content=raw_overview.get("content", ""),
                 tag=tag,
+            )
+            seo_tag = SeoTag.OPTIMIZED if metrics.get("seo", 0) >= 70 else SeoTag.NEEDS_OPTIMIZATION
+            seo_summary = ReportSummary(
+                title=raw_seo.get("title", ""),
+                content=raw_seo.get("content", ""),
+                tag=seo_tag,
             )
 
             # Kafka 결과 발행
@@ -123,6 +135,7 @@ class ReportConsumerImplV2(ReportConsumer):
                             ],
                         ),
                         overview_summary=overview_summary,
+                        seo_summary=seo_summary,
                     ),
                 ),
                 topic=kafka_config.report_result_v3,

@@ -399,6 +399,33 @@ Google Trends 데이터를 기반으로 현재 가장 주목받는 키워드를 
 답변:""".strip()
 
     @staticmethod
+    def get_seo_summary_prompt() -> str:
+        """seo_summary 생성 프롬프트 - SEO 점수 기반 한줄 요약"""
+        return """
+당신은 유튜브 SEO 최적화 전문가입니다.
+제공된 SEO 점수와 세부 항목을 바탕으로 SEO 상태를 요약하세요.
+
+지침:
+- title: SEO 상태를 한 문장으로 (15자 이내)
+- content: 가장 큰 강점 또는 개선점을 구체적으로 (60자 이내, "해요체" 사용)
+- tag: 아래 규칙에 따라 결정 (LLM이 판단하지 말 것)
+  * 최적화 원할: seo_score >= 70
+  * 최적화 필요: seo_score < 70
+
+백틱(```)이나 추가 설명 없이 순수 JSON만 출력하세요.
+
+출력 형식:
+{{
+  "title": "SEO 최적화 필요",
+  "content": "제목 키워드 배치는 좋지만 설명란이 부족해 검색 노출이 제한돼요.",
+  "tag": "최적화 필요"
+}}
+
+질문: {input}
+문서 내용: {context}
+답변:""".strip()
+
+    @staticmethod
     def get_overview_summary_prompt() -> str:
         """overview_summary 생성 프롬프트 - 지표 + 댓글 기반"""
         return """

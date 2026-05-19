@@ -63,7 +63,7 @@ class VideoService:
             analytics_service.get_youtube_analytics_data(
                 access_token=access_token,
                 video_id=video.youtube_video_id,
-                metrics="views,averageViewDuration,likes,shares,subscribersGained,impressionClickThroughRate",
+                metrics="views,averageViewDuration,likes,shares,subscribersGained",
                 start_date=start_date,
                 end_date=end_date,
             ),
@@ -105,8 +105,11 @@ class VideoService:
             return 0.0
 
         row = rows[0]
+        views = row[0] if len(row) > 0 else 0
         avg_view_duration = row[1] if len(row) > 1 else 0
-        ctr = row[5] if len(row) > 5 else 0  # impressionClickThroughRate
+        likes = row[2] if len(row) > 2 else 0
+        shares = row[3] if len(row) > 3 else 0
+        subscribers_gained = row[4] if len(row) > 4 else 0
 
         duration_str = video_detail.get("duration", "PT0S")
         try:
@@ -115,10 +118,10 @@ class VideoService:
             total_seconds = 1
 
         watch_ratio = min(avg_view_duration / total_seconds, 1.0) if total_seconds else 0
-        ctr_normalized = min(ctr / 10.0, 1.0)  # CTR 10%를 만점 기준
+        engagement_rate = min((likes + shares + subscribers_gained) / views, 1.0) if views else 0
 
-        # 시청지속률 30점 + CTR 20점
-        return round(watch_ratio * 30 + ctr_normalized * 20, 1)
+        # 시청지속률 30점 + engagement 20점
+        return round(watch_ratio * 30 + engagement_rate * 20, 1)
 
     def _calculate_revisit(self, video: Video, analytics_data: dict) -> float:
         """재방문률 = (좋아요 + 공유 + 구독) / 조회수"""

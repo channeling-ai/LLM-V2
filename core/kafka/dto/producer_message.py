@@ -65,6 +65,7 @@ class OverviewResult(BaseModel):
     metrics: Metrics
     comment_analysis: CommentAnalysis
     overview_summary: ReportSummary
+    seo_summary: Optional[ReportSummary] = None
 
 
 class AnalysisResult(BaseModel):

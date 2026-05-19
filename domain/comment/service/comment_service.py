@@ -70,12 +70,17 @@ class CommentService:
         for comment, category in zip(raw_comments, classified):
             grouped[category].append(comment)
 
-        # 5. 카테고리별 한줄 요약 (1회 LLM 호출)
+        # 5. 카테고리별 한줄 요약 (댓글이 있는 카테고리만 LLM 호출)
         category_texts = {
             cat: [c["content"] for c in comments[:50]]
             for cat, comments in grouped.items()
+            if comments
         }
-        category_summaries = await self.rag_service.summarize_comment_categories(category_texts)
+        raw_summaries = await self.rag_service.summarize_comment_categories(category_texts)
+        category_summaries = {
+            cat: raw_summaries.get(cat, "")
+            for cat in ["positive", "negative", "neutral", "advice"]
+        }
 
         # 6. 대표 댓글 선정 (카테고리별 좋아요 상위 3개)
         representative_comments = self._select_representative(grouped)

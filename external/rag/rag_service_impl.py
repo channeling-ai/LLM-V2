@@ -28,6 +28,19 @@ from external.youtube.youtube_video_service import VideoService
 logger = logging.getLogger(__name__)
 
 
+def _parse_json(raw: str) -> Any:
+    """LLM 응답에서 JSON 파싱. 백틱 제거 후 json-repair로 복구 시도."""
+    from json_repair import repair_json
+    clean = raw.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        repaired = repair_json(clean, return_objects=True)
+        if repaired is not None:
+            return repaired
+        raise
+
+
 class RagServiceImpl(RagService):
     def __init__(self):
         self.transcript_service = TranscriptService()
@@ -49,8 +62,7 @@ class RagServiceImpl(RagService):
         result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_video_summary_prompt())
 
         try:
-            clean = result.strip().replace("```json", "").replace("```", "")
-            return json.loads(clean)
+            return _parse_json(result)
         except json.JSONDecodeError as e:
             logger.error("스크립트 요약 JSON 파싱 오류: %s, 원본: %s", e, result[:200])
             return []
@@ -62,10 +74,9 @@ class RagServiceImpl(RagService):
         result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_batch_comment_classification_prompt())
 
         try:
-            clean = result.strip().replace("```json", "").replace("```", "")
-            return json.loads(clean)
+            return _parse_json(result)
         except json.JSONDecodeError as e:
-            logger.error("배치 댓글 분류 JSON 파싱 오류: %s", e)
+            logger.error("배치 댓글 분류 JSON 파싱 오류: %s, 원본: %s", e, result[:300])
             return [{"index": c["index"], "emotion": 3} for c in comments]
 
     async def summarize_comment_categories(self, classified_comments: Dict[str, List[str]]) -> Dict[str, str]:
@@ -75,10 +86,9 @@ class RagServiceImpl(RagService):
         result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_category_summary_prompt())
 
         try:
-            clean = result.strip().replace("```json", "").replace("```", "")
-            return json.loads(clean)
+            return _parse_json(result)
         except json.JSONDecodeError as e:
-            logger.error("카테고리 요약 JSON 파싱 오류: %s", e)
+            logger.error("카테고리 요약 JSON 파싱 오류: %s, 원본: %s", e, result[:300])
             return {"positive": "", "negative": "", "neutral": "", "advice": ""}
 
     async def evaluate_seo_qualitative(self, video_details: Dict[str, Any]) -> Dict[str, Any]:
@@ -92,10 +102,9 @@ class RagServiceImpl(RagService):
         result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_seo_qualitative_prompt())
 
         try:
-            clean = result.strip().replace("```json", "").replace("```", "")
-            return json.loads(clean)
+            return _parse_json(result)
         except json.JSONDecodeError as e:
-            logger.error("SEO 정성평가 JSON 파싱 오류: %s", e)
+            logger.error("SEO 정성평가 JSON 파싱 오류: %s, 원본: %s", e, result[:300])
             return {"score": 0, "breakdown": {"title": 0, "description": 0, "tags": 0}}
 
     async def generate_overview_summary(
@@ -117,11 +126,22 @@ class RagServiceImpl(RagService):
         result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_overview_summary_prompt())
 
         try:
-            clean = result.strip().replace("```json", "").replace("```", "")
-            return json.loads(clean)
+            return _parse_json(result)
         except json.JSONDecodeError as e:
-            logger.error("overview_summary JSON 파싱 오류: %s", e)
+            logger.error("overview_summary JSON 파싱 오류: %s, 원본: %s", e, result[:300])
             return {"title": "", "content": "", "tag": "부정"}
+
+    async def generate_seo_summary(self, seo_score: float) -> Dict[str, str]:
+        """seo_summary 생성 - SEO 점수 기반 한줄 요약"""
+        context = json.dumps({"seo_score": seo_score}, ensure_ascii=False)
+        query = "SEO 점수와 세부 항목을 바탕으로 SEO 상태를 요약해주세요."
+        result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_seo_summary_prompt())
+
+        try:
+            return _parse_json(result)
+        except json.JSONDecodeError as e:
+            logger.error("seo_summary JSON 파싱 오류: %s, 원본: %s", e, result[:300])
+            return {"title": "", "content": "", "tag": "개선"}
 
     async def classify_comment(self, comment: str) -> Dict[str, Any]:
         query = "유튜브 댓글을 분석하여 감정을 분류하고 백틱(```)이나 설명 없이 순수 JSON으로 출력해주세요."
