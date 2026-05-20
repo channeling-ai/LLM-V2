@@ -98,7 +98,7 @@ class ReportConsumerImpl(ReportConsumer):
 
             # 요약 프로세스
             try:
-                await self.report_service.create_summary(video, report_id)
+                await self.report_service.create_script_summary(video, report_id)
             except Exception as e:
                 logger.error(f"요약 프로세스 실패: {e!r}")
                 raise

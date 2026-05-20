@@ -87,35 +87,41 @@ class ReportConsumerImplV2(ReportConsumer):
 
             # 3개 프로세스 병렬 실행
             summary, comment_analysis, metrics = await asyncio.gather(
-                self.report_service.create_summary(video, report_id, skip_vector_save=skip_vector_save),
+                self.report_service.create_script_summary(video, report_id, skip_vector_save=skip_vector_save),
                 self.comment_service.analyze_comments(video, report_id, start_date=start_date, end_date=end_date),
                 self.video_service.analyze_metrics(video, report_id, token, start_date=start_date, end_date=end_date),
             )
 
-            # overview_summary 생성 (태그는 규칙 기반)
+            # overview_summary / seo_summary — 실패해도 성공 메시지 발행
             positive_pct = comment_analysis.get("positive_pct", 0)
-            tag = OverviewTag.POSITIVE if positive_pct >= 50 else OverviewTag.NEGATIVE
-            raw_overview, raw_seo = await asyncio.gather(
-                self.rag_service.generate_overview_summary(
-                    metrics=metrics,
-                    comment_analysis=comment_analysis,
-                    previous_report=previous_report,
-                ),
-                self.rag_service.generate_seo_summary(
-                    seo_score=metrics.get("seo", 0),
-                ),
-            )
-            overview_summary = ReportSummary(
-                title=raw_overview.get("title", ""),
-                content=raw_overview.get("content", ""),
-                tag=tag,
-            )
+            overview_tag = OverviewTag.POSITIVE if positive_pct >= 50 else OverviewTag.NEGATIVE
             seo_tag = SeoTag.OPTIMIZED if metrics.get("seo", 0) >= 70 else SeoTag.NEEDS_OPTIMIZATION
-            seo_summary = ReportSummary(
-                title=raw_seo.get("title", ""),
-                content=raw_seo.get("content", ""),
-                tag=seo_tag,
-            )
+
+            overview_summary = ReportSummary(title="", content="", tag=overview_tag)
+            seo_summary = ReportSummary(title="", content="", tag=seo_tag)
+            try:
+                raw_overview, raw_seo = await asyncio.gather(
+                    self.rag_service.generate_overview_summary(
+                        metrics=metrics,
+                        comment_analysis=comment_analysis,
+                        previous_report=previous_report,
+                    ),
+                    self.rag_service.generate_seo_summary(
+                        seo_score=metrics.get("seo", 0),
+                    ),
+                )
+                overview_summary = ReportSummary(
+                    title=raw_overview.get("title", ""),
+                    content=raw_overview.get("content", ""),
+                    tag=overview_tag,
+                )
+                seo_summary = ReportSummary(
+                    title=raw_seo.get("title", ""),
+                    content=raw_seo.get("content", ""),
+                    tag=seo_tag,
+                )
+            except Exception as e:
+                logger.error("[V2] overview_summary/seo_summary 생성 실패 (report_id=%s): %s", report_id, e)
 
             # Kafka 결과 발행
             await kafka_broker.publish(

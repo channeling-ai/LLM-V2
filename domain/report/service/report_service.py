@@ -23,7 +23,7 @@ class ReportService:
         self.channel_repository = ChannelRepository()
         self.rag_service = RagServiceImpl()
 
-    async def create_summary(self, video: Video, report_id: int, skip_vector_save: bool = False) -> list:
+    async def create_script_summary(self, video: Video, report_id: int, skip_vector_save: bool = False) -> list:
         """
         영상 스크립트 요약 생성 (JSON 배열 반환)
         벡터 DB 저장만 담당 — PostgreSQL 저장은 Spring(Kafka 결과 수신 후)에서 처리
