@@ -51,11 +51,11 @@ class RagServiceImpl(RagService):
             return "자막을 불러올 수 없는 영상입니다."
 
         query = "유튜브 영상 자막을 기반으로 10초 단위 개요를 위의 형식에 따라 작성해주세요."
-        return self.execute_llm_chain(context, query, PromptTemplateManager.get_video_summary_prompt())
+        return await self.execute_llm_chain(context, query, PromptTemplateManager.get_video_summary_prompt())
     
-    def classify_comment(self, comment: str) -> Dict[str, Any]:
+    async def classify_comment(self, comment: str) -> Dict[str, Any]:
         query = "유튜브 댓글을 분석하여 감정을 분류하고 백틱(```)이나 설명 없이 순수 JSON으로 출력해주세요."
-        result = self.execute_llm_chain(comment, query, PromptTemplateManager.get_comment_reaction_prompt())
+        result = await self.execute_llm_chain(comment, query, PromptTemplateManager.get_comment_reaction_prompt())
         print("LLM 응답 = ", result)
 
         try:
@@ -86,13 +86,13 @@ class RagServiceImpl(RagService):
                 "comment_type": CommentType.NEUTRAL
             }
 
-    def summarize_comments(self, comments: str, emotion: str, comment_count: int) -> List[str]:
+    async def summarize_comments(self, comments: str, emotion: str, comment_count: int) -> List[str]:
         query = (
             "유튜브 댓글을 분석하여 요약하고 "
             "백틱(```)이나 설명 없이 순수 JSON으로 출력해주세요."
         )
 
-        result = self.execute_llm_chain(
+        result = await self.execute_llm_chain(
             comments, query, PromptTemplateManager.get_sumarlize_comment_prompt(emotion, comment_count)
         )
         print("LLM 응답 = ", result)
@@ -267,7 +267,7 @@ class RagServiceImpl(RagService):
             # 프롬프트 템플릿 가져오기 및 LLM 실행
             llm_start = time.time()
             prompt_template = PromptTemplateManager.get_algorithm_optimization_prompt()
-            result = self.execute_llm_chain(context, query, prompt_template)
+            result = await self.execute_llm_chain(context, query, prompt_template)
             llm_time = time.time() - llm_start
             logger.info(f"🤖 알고리즘 최적화 LLM 실행 완료 ({llm_time:.2f}초)")
             
@@ -278,7 +278,7 @@ class RagServiceImpl(RagService):
             raise e
             
 
-    def analyze_realtime_trends(self, limit: int = 5, geo: str = "KR") -> Dict:
+    async def analyze_realtime_trends(self, limit: int = 5, geo: str = "KR") -> Dict:
         """
         실시간 트렌드를 분석하여 YouTube 콘텐츠에 적합한 형태로 반환
         
@@ -316,7 +316,7 @@ class RagServiceImpl(RagService):
         # 5. LLM 실행 및 결과 파싱
         llm_start = time.time()
         logger.info("🤖 실시간 트렌드 분석 LLM 실행 중...")
-        result_str = self.execute_llm_chain(
+        result_str = await self.execute_llm_chain(
             context=json.dumps(context, ensure_ascii=False),
             query=query,
             prompt_template_str=prompt_template
@@ -334,7 +334,7 @@ class RagServiceImpl(RagService):
 
 
 
-    def analyze_channel_trends(
+    async def analyze_channel_trends(
         self,
         channel_concept: str,
         target_audience: str,
@@ -392,7 +392,7 @@ class RagServiceImpl(RagService):
         llm_start = time.time()
         logger.info("🤖 채널 맞춤형 트렌드 분석 LLM 실행 중...")
         combine_chain = create_stuff_documents_chain(self.llm, chat_prompt)
-        result_str = combine_chain.invoke({
+        result_str = await combine_chain.ainvoke({
             "input": query,
             "context": documents,
             "channel_concept": channel_concept,
@@ -415,7 +415,7 @@ class RagServiceImpl(RagService):
 
 
 
-    def execute_llm_chain(self, context: str, query: str, prompt_template_str: str) -> str:
+    async def execute_llm_chain(self, context: str, query: str, prompt_template_str: str) -> str:
         """
         LLM 체인을 실행하는 공통 메서드
         :param context: LLM에 제공할 정보(youtube api를 통해 가져온 자막 등)
@@ -423,7 +423,7 @@ class RagServiceImpl(RagService):
         :return: LLM의 응답
         """
         documents = [Document(page_content=context)]
-        
+
         # 프롬프트 템플릿 생성
         prompt_template = PromptTemplate(
             input_variables=["input", "context"],
@@ -436,18 +436,17 @@ class RagServiceImpl(RagService):
 
         # 체인 조합 및 실행
         combine_chain = create_stuff_documents_chain(self.llm, chat_prompt)
-        result = combine_chain.invoke({"input": query, "context": documents})
+        result = await combine_chain.ainvoke({"input": query, "context": documents})
         return result
-    
-    def execute_llm_direct(self, prompt: str) -> str:
+
+    async def execute_llm_direct(self, prompt: str) -> str:
         """
         이미 완성된 프롬프트 문자열을 바로 LLM에 넣어 실행하는 함수
 
         :param prompt: 완성된 프롬프트 문자열
         :return: LLM의 응답
         """
-        # self.llm이 직접 프롬프트 문자열을 받아 실행하는 함수라고 가정
-        result = self.llm.invoke(prompt)
+        result = await self.llm.ainvoke(prompt)
         return result.content
 
     async def create_update_summary(self, prev_report: ReportLog, curr_report: Report):

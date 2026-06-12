@@ -159,7 +159,7 @@ async def analyze_leave(video: Video, token: str) -> str:
         # 10. LLM 직접 호출해서 결과 가져오기
         llm_start = time.time()
         logger.info("🤖 LLM 이탈 분석 실행 중...")
-        result = rag_service.execute_llm_direct(formatted_prompt)
+        result = await rag_service.execute_llm_direct(formatted_prompt)
         llm_time = time.time() - llm_start
         logger.info(f"🤖 LLM 이탈 분석 완료 ({llm_time:.2f}초)")
         

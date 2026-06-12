@@ -22,7 +22,7 @@ async def create_real_time_keyword():
     await trend_keyword_service.delete_past_realtime_keyword_if_exist()
 
 
-    realtime_keyword = rag_service.analyze_realtime_trends()
+    realtime_keyword = await rag_service.analyze_realtime_trends()
     if "error" not in realtime_keyword:
         logger.info(f"실시간 트렌드 LLM 응답: {realtime_keyword}")
 
@@ -65,7 +65,7 @@ async def create_channel_keyword(channel_id: int):
     latest_trend_keywords = await trend_keyword_repository.get_latest_real_time_keywords()
 
     #채널 트랜드 ....
-    channel_keyword = rag_service.analyze_channel_trends(
+    channel_keyword = await rag_service.analyze_channel_trends(
         channel_concept=channel_concept,
         target_audience=target_audience,
         latest_trend_keywords=latest_trend_keywords  # 키워드 인자로 전달

@@ -22,6 +22,8 @@ class KafkaConfig(BaseSettings):
 
     # Consumer 설정
     consumer_group_id: str = "llm-service-group"
+    overview_consumer_group_id: str = "llm-overview-group"
+    analysis_consumer_group_id: str = "llm-analysis-group"
     # 오프셋이 없을 때 읽기 시작 위치 (earliest=처음부터, latest=최신부터)
     consumer_auto_offset_reset: str = "earliest"
     # 오프셋 자동 커밋 여부 (True시 자동으로 읽은 위치 저장)
@@ -39,6 +41,8 @@ class KafkaConfig(BaseSettings):
     overview_topic_v2: str = "overview-topic-v2"
     analysis_topic_v2: str = "analysis-topic-v2"
     idea_topic_v2: str = "idea-topic-v2"
+    report_result_v3: str = "report-result-v3"
+
 
     class Config:
         # 환경 변수에서 설정값을 읽어옴

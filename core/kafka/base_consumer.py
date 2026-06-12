@@ -11,9 +11,10 @@ logger = logging.getLogger(__name__)
 class BaseConsumer(ABC):
     """공통 Kafka Consumer 클래스"""
 
-    def __init__(self, broker: KafkaBroker):
+    def __init__(self, broker: KafkaBroker, group_id: str = kafka_config.consumer_group_id):
         self.broker = broker
         self.config = kafka_config
+        self.group_id = group_id
         # 어떤 토픽을 구독할지 핸들러를 저장하는 딕셔너리
         # 키: 토픽 이름, 값: 메시지 처리 함수
         self._message_handlers: Dict[str, Callable] = {}
@@ -37,10 +38,11 @@ class BaseConsumer(ABC):
 
         @self.broker.subscriber(
             topic,
-            group_id=self.config.consumer_group_id,
+            group_id=self.group_id,
             auto_offset_reset=self.config.consumer_auto_offset_reset,
             auto_commit=self.config.consumer_enable_auto_commit,
             auto_commit_interval_ms=self.config.consumer_auto_commit_interval_ms,
+            isolation_level="read_committed",
         )
         async def message_processor(message: Dict[str, Any]):
             try:
