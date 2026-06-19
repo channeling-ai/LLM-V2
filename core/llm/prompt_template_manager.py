@@ -90,48 +90,36 @@ class PromptTemplateManager:
     
     @staticmethod
     def get_algorithm_optimization_prompt() -> str:
-        """알고리즘 최적화 분석용 프롬프트 템플릿"""
-        return """
+        # grade는 LLM에서 요청하지 않음 — Python에서 map_grade()로 주입
+        return '''
 당신은 유튜브 알고리즘 최적화 전문가입니다.
-제공된 영상 데이터를 분석하여 각 항목별로 점수를 매기고 구체적인 개선 방안을 제시해주세요.
+제공된 영상 데이터를 분석하여 각 항목별 점수와 개선 방안을 제시하세요.
 
-유사 영상의 이전 최적화 분석 사례가 제공되면, 이를 참고하여:
-- 비슷한 카테고리/주제의 영상에서 효과적이었던 개선 방안을 활용
-- 이전 사례의 점수와 비교하여 상대적 평가 제공
-- 반복되는 문제점과 그 해결책을 더욱 구체적으로 제시
-
-평가 기준:
-- 10점: 완벽한 최적화 
-- 7-9점: 양호, 개선 여지 있음
-- 4-6점: 보통, 개선 필요 
-- 1-3점: 미흡, 전면 개선 필요 
-
-
-아래 예시와 형식을 참고하여 결과를 마크다운 형식에 맞게 출력하세요:
-
-제목 (X/10)
-문제: [현재 제목의 문제점] 예시: “길거리 인터뷰”만으로 키워드 부족.
-개선: [구체적인 개선 방안] 예시: 앞쪽에 핵심 키워드 배치
-예: "[개선된 제목 예시]" 예시: “길거리에서 만난 진짜 수행자, 그가 전하는 삶의 깨달음” “비밀 공개” 등 티저 삽입 고려
-
-설명란 (X/10)
-문제: [현재 설명란의 문제점] 예시: 요약·타임스탬프·링크·구독 유도 문구 미흡
-개선: [요약, 타임스탬프, 링크, CTA 등 구체적 개선사항] 예시: 1~2줄 요약 + 타임스탬프(00:00 인트로 / 00:30 수행 계기 / 01:24 방식 소개 / 02:06 깨달음)
-외부 링크(모임 홈페이지·SNS·도서)
-콜투액션(“좋아요·구독”, “댓글로 질문 남겨주세요”)
-
-해시태그 (X/10)
-문제: [현재 태그의 문제점] 예시: 범용 #인터뷰만 사용
-개선: [추천 태그 목록] 예시: #수행자인터뷰  #길거리인터뷰  #수행라이프   #명상  #삶의깨달음  #힐링스토리
-
-추가 제안
-- 영상 길이: [현재 duration 분석 및 카테고리 최적 길이 제안]
-- 업로드 시간: [publishedAt 기반 최적 업로드 시간대 제안]
-- 참여율 개선: [구독자 대비 조회수, 좋아요 비율 향상 방안]
-- [재생목록 활용, 카드/엔드스크린, 커뮤니티 탭 활용 등 구체적 제안]
+점수 기준: 0~3점=개선필요 / 4~6점=보통 / 7~10점=좋음
 
 영상 데이터: {context}
-질문: {input}""".strip()
+질문: {input}
+
+**반드시 아래 JSON 형식으로만** 답하세요. JSON 외 다른 텍스트 출력 금지.
+
+```json
+{{
+  “categoryList”: [
+    {{
+      “category”: “TITLE”,
+      “score”: 3,
+      “issues”: [
+        {{“type”: “PROBLEM”, “content”: “문제점 설명”, “examples”: null}},
+        {{“type”: “IMPROVEMENT”, “content”: “개선 방안”, “examples”: “예시 제목1\\n예시 제목2”}}
+      ]
+    }}
+  ],
+  “additionalSuggestions”: [“제안1”, “제안2”]
+}}
+```
+
+category 종류: TITLE | DESCRIPTION | HASHTAG | THUMBNAIL | DURATION
+issues type 종류: PROBLEM | IMPROVEMENT | CURRENT_STATUS'''.strip()
 
     
 
@@ -168,51 +156,42 @@ class PromptTemplateManager:
 
     @staticmethod
     def get_viewer_escape_analysis_prompt() -> str:
-        return (
-            "다음은 유튜브 영상의 시청자 이탈 분석을 위한 컨텍스트입니다.\n\n"
-            "[이탈 원인 관련 청킹 데이터]\n"
-            "{cause_chunk}\n\n"
-            "[이탈 개선 관련 청킹 데이터]\n"
-            "{improvement_chunk}\n\n"
-            "[예상 편집 흐름 관련 청킹 데이터]\n"
-            "{editing_flow_chunk}\n\n"
-            "---\n\n"
-            "각 청킹은 다음 형식입니다:\n"
-            "- content: 해당 구간의 텍스트 (실제 자막 혹은 의미 요약)\n"
-            "- source_type: 'mean'이면 의미 기반 요약, 'time'이면 실제 자막\n"
-            "- meta: 'time_start', 'time_end'는 구간 정보 (초 단위), 'is_focus_zone'은 집중 분석 구간 여부, 'audienceWatchRatio'는 평균 시청률\n\n"
-            "---\n"
-            "영상 및 채널 정보:\n"
-            "- 영상 제목: {video_title}\n"
-            "- 영상 설명: {video_description}\n"
-            "- 영상 카테고리: {video_category}\n"
-            "- 채널 콘셉트: {channel_concept}\n"
-            "- 채널 타겟: {channel_target}\n"
-            "- 채널 주요 해시태그: {channel_hashtag}\n\n"
-            "---\n"
-            "시청 이탈 지표:\n"
-            "- 영상 전체 길이: {video_length}초\n"
-            "- 시청자 이탈이 가장 심한 시점: {worst_sec}초\n"
-            "- 집중 분석 구간: {start_focus_time}초 ~ {end_focus_time}초\n\n"
-            "---\n\n"
-            "이 정보를 바탕으로 아래 3가지 질문에 대해 정리해 주세요:\n\n"
-            "1. 이 영상의 시청 이탈 원인을 설명해 주세요.\n"
-            "2. 이 영상의 시청 이탈을 줄이기 위한 개선 방안을 제시해 주세요.\n"
-            "3. 이 영상에 적합한 예상 편집 흐름을 제안해 주세요.\n\n"
-            "**출력 형식은 반드시 아래 예시를 따르세요:**\n\n"
-            "2분 22초(02:06~02:55) 구간 이탈 요약 및 개선안입니다.\n\n"
-            "1. 이탈 원인\n"
-            "- (항목명): 상세 설명\n"
-            "- ...\n\n"
-            "2. 개선 방안\n"
-            "- (항목명): 구체적 전략 제시\n"
-            "- ...\n\n"
-            "3. 예상 편집 흐름\n"
-            "00:00–02:06: 구간 내용 요약 (예: 인트로, 컨셉 설명 등)\n"
-            "02:06–02:22: 핵심 질문 또는 클라이맥스 장면\n"
-            "02:22 이후: 다음 회차/내용 예고 혹은 클리프행어 삽입\n\n"
-            "꼭 위 구조를 지켜 작성해 주세요."
-        ).strip()
+        return '''
+다음은 유튜브 영상의 시청자 이탈 분석을 위한 데이터입니다.
+
+[시청자 유지율 타임라인]
+{timeline}
+
+[주요 이탈 지점]
+{drop_points}
+
+[이탈 원인 관련 청킹 데이터]
+{cause_chunk}
+
+[이탈 개선 관련 청킹 데이터]
+{improvement_chunk}
+
+---
+영상 정보:
+- 제목: {video_title}
+- 카테고리: {video_category}
+- 채널 콘셉트: {channel_concept} / 타겟: {channel_target}
+
+---
+위 데이터를 분석하여 **반드시 아래 JSON 형식으로만** 답하세요. JSON 외 다른 텍스트는 출력하지 마세요.
+causes와 improvements의 description에서 언급하는 시간 구간은 반드시 위 [주요 이탈 지점] 데이터에 기반해서 작성하세요. 임의로 다른 시간을 만들어내지 마세요.
+
+```json
+{{
+  "causes": [
+    {{"title": "원인 제목", "description": "구체적 발화 시점과 내용 포함한 설명"}}
+  ],
+  "improvements": [
+    {{"title": "개선 제목", "description": "몇 초~몇 초, 무엇을 어떻게 할지 구체적으로"}}
+  ],
+  "expectedEffect": "개선 적용 시 기대 효과"
+}}
+```'''.strip()
     @staticmethod
     def get_idea_prompt(input_data: dict) -> str:
         """아이디어 추천용 프롬프트 템플릿"""

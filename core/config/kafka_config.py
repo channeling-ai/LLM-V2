@@ -30,6 +30,12 @@ class KafkaConfig(BaseSettings):
     consumer_enable_auto_commit: bool = True
     # 자동 커밋 간격 (밀리초, 5초마다 오프셋 커밋)
     consumer_auto_commit_interval_ms: int = 5000
+    # 세션 타임아웃 (기본 10초는 LLM 처리 시간보다 짧아 리밸런싱 유발)
+    consumer_session_timeout_ms: int = 60000
+    # heartbeat 간격 (session_timeout_ms의 1/3 이하 권장)
+    consumer_heartbeat_interval_ms: int = 20000
+    # 메시지 처리 최대 허용 시간 (LLM 호출 포함 여유 있게 설정)
+    consumer_max_poll_interval_ms: int = 600000
   
 
     # 토픽 설정
@@ -43,6 +49,9 @@ class KafkaConfig(BaseSettings):
     idea_topic_v2: str = "idea-topic-v2"
     report_result_v3: str = "report-result-v3"
 
+
+    # V3 결과 발행 토픽 (FastAPI → Spring)
+    report_result_v3: str = "report-result-v3"
 
     class Config:
         # 환경 변수에서 설정값을 읽어옴
