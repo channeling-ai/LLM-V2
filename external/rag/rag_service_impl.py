@@ -196,83 +196,87 @@ class RagServiceImpl(RagService):
             raise e
 
     
-    async def analyze_algorithm_optimization(self, video_id: str, skip_vector_save: bool = False) -> str:
+    async def analyze_algorithm_optimization(self, video_id: str, skip_vector_save: bool = False) -> dict:
         """
         유튜브 알고리즘 최적화 분석
-        
+
         Args:
             video_id: YouTube 영상 ID
-            
+
         Returns:
-            알고리즘 최적화 분석 결과
+            알고리즘 최적화 분석 결과 dict (categoryList, additionalSuggestions, grade 주입 완료)
         """
+        import re
+        from external.youtube.analytics_service import map_grade
+
         try:
             # 영상 상세 정보 조회 (YouTube API + Redis 캐싱)
             video_start = time.time()
             logger.info("📹 YouTube 영상 상세 정보 API 호출 중...")
             video_details = await self.video_detail_service.get_video_details(video_id)
-            video_time = time.time() - video_start
-            logger.info(f"📹 YouTube 영상 상세 정보 API 호출 완료 ({video_time:.2f}초)")
+            logger.info(f"📹 YouTube 영상 상세 정보 API 호출 완료 ({time.time() - video_start:.2f}초)")
 
-            # 채널 정보 조회 (YouTube API)
             channel_id = video_details.get('channelId')
-
             channel_stats = {}
             if channel_id:
                 channel_start = time.time()
                 logger.info("📺 YouTube 채널 통계 API 호출 중...")
                 channel_stats = self.video_detail_service.get_channel_stats(channel_id)
-                channel_time = time.time() - channel_start
-                logger.info(f"📺 YouTube 채널 통계 API 호출 완료 ({channel_time:.2f}초)")
-            
-            # 분석에 필요한 데이터 구조화
+                logger.info(f"📺 YouTube 채널 통계 API 호출 완료 ({time.time() - channel_start:.2f}초)")
+
             optimization_data = {
                 "video": {
-                    "title": video_details.get('title', ''),
-                    "description": video_details.get('description', ''),
-                    "tags": video_details.get('tags', []),
-                    "publishedAt": video_details.get('publishedAt', ''),
-                    "duration": video_details.get('duration', ''),
-                    "viewCount": video_details.get('viewCount', 0),
-                    "likeCount": video_details.get('likeCount', 0),
+                    "title":        video_details.get('title', ''),
+                    "description":  video_details.get('description', ''),
+                    "tags":         video_details.get('tags', []),
+                    "publishedAt":  video_details.get('publishedAt', ''),
+                    "duration":     video_details.get('duration', ''),
+                    "viewCount":    video_details.get('viewCount', 0),
+                    "likeCount":    video_details.get('likeCount', 0),
                     "commentCount": video_details.get('commentCount', 0),
-                    "thumbnails": video_details.get('thumbnails', {})
+                    "thumbnails":   video_details.get('thumbnails', {}),
                 },
                 "channel": {
-                    "name": video_details.get('channelTitle', ''),
+                    "name":            video_details.get('channelTitle', ''),
                     "subscriberCount": channel_stats.get('subscriberCount', 0),
-                    "totalViewCount": channel_stats.get('viewCount', 0),
-                    "totalVideoCount": channel_stats.get('videoCount', 0)
-                }
+                    "totalViewCount":  channel_stats.get('viewCount', 0),
+                    "totalVideoCount": channel_stats.get('videoCount', 0),
+                },
             }
-            
-            # JSON 형식으로 context 생성
+
             context = json.dumps(optimization_data, ensure_ascii=False, indent=2)
-            
-            # 유사한 이전 알고리즘 최적화 분석 사례 검색 (skip_vector_save가 False인 경우만)
+
             if not skip_vector_save:
                 query_text = f"제목: {video_details.get('title', '')}, 설명: {video_details.get('description', '')[:200]}"
                 similar_chunks = await self.content_chunk_repository.search_similar_optimization(
-                    query_text=query_text,
-                    limit=3
+                    query_text=query_text, limit=3
                 )
-                
-                # 이전 분석 사례가 있으면 context에 추가
                 if similar_chunks:
                     previous_cases = "\n\n---\n\n".join([chunk.get("content", "") for chunk in similar_chunks])
                     context += f"\n\n## 유사 영상의 이전 최적화 분석 사례:\n{previous_cases}"
-            
+
             query = "이 유튜브 영상의 알고리즘 최적화 상태를 분석하고 구체적인 개선 방안을 제시해주세요."
-            
-            # 프롬프트 템플릿 가져오기 및 LLM 실행
-            llm_start = time.time()
             prompt_template = PromptTemplateManager.get_algorithm_optimization_prompt()
-            result = await self.execute_llm_chain(context, query, prompt_template)
-            llm_time = time.time() - llm_start
-            logger.info(f"🤖 알고리즘 최적화 LLM 실행 완료 ({llm_time:.2f}초)")
-            
-            return result
-        
+
+            llm_start = time.time()
+            result_str = await self.execute_llm_chain(context, query, prompt_template)
+            logger.info(f"🤖 알고리즘 최적화 LLM 실행 완료 ({time.time() - llm_start:.2f}초)")
+
+            # JSON 파싱 (마크다운 코드블록 제거 후 파싱)
+            json_str = re.sub(r"```json|```", "", result_str).strip()
+            try:
+                parsed = json.loads(json_str)
+            except json.JSONDecodeError:
+                logger.error(f"알고리즘 최적화 LLM JSON 파싱 실패: {result_str[:200]}")
+                return {"categoryList": [], "additionalSuggestions": []}
+
+            # grade 주입 — LLM이 score만 반환하므로 Python에서 계산
+            # 프롬프트에서 grade를 요청하지 않는 이유: score/grade 불일치 방지
+            for cat in parsed.get("categoryList", []):
+                cat["grade"] = map_grade(cat.get("score", 0))
+
+            return parsed
+
         except Exception as e:
             logger.error(f"알고리즘 최적화 분석 중 오류 발생: {e}")
             raise e
