@@ -67,20 +67,103 @@ async def get_youtube_analytics_data(access_token: str, video_id: str, metrics: 
     return response.json()
 
 
-def find_max_drop_time(analytics_rows, video_length_sec=60):
-        # 종료 구간 제외 (예: elapsedRatio >= 0.95)
-    filtered_rows = [row for row in analytics_rows if row[0] < 0.95]
+def find_worst_drop(
+    analytics_rows: list,
+    video_length: float,
+    min_ratio: float = 0.05,  # 앞 5% 자연 이탈 제외
+) -> dict:
+    """
+    상대적 낙폭 기준 최대 이탈 지점 1개 반환
+    반환: {"ratio": float, "sec": float}
+    """
+    if not analytics_rows:
+        return {"ratio": min_ratio, "sec": min_ratio * video_length}
 
-    max_drop = 0
-    drop_point = 0.0
+    # 앞 5%: 영상 시작 직후 자연 이탈 구간 제외
+    # 뒤 5%: 영상 종료 직전 자연 이탈 구간 제외
+    filtered = [r for r in analytics_rows if min_ratio < r[0] < 0.95]
+    worst_ratio, worst_drop = min_ratio, 0.0
 
-    for i in range(1, len(filtered_rows)):
-        prev_ratio = filtered_rows[i - 1][1]  # audienceWatchRatio
-        curr_ratio = filtered_rows[i][1]
-        drop = prev_ratio - curr_ratio
+    for i in range(1, len(filtered)):
+        prev, curr = filtered[i - 1][1], filtered[i][1]
+        if prev <= 0:
+            continue
+        # 절대 낙폭 대신 상대 낙폭 사용
+        # 후반부는 유지율이 낮아 절대값이 작아도 실제론 심각한 이탈일 수 있음
+        # 예) 80%→60% (상대 25%) vs 30%→10% (상대 67%) — 후자가 더 심각
+        relative_drop = (prev - curr) / prev
+        if relative_drop > worst_drop:
+            worst_drop = relative_drop
+            worst_ratio = filtered[i][0]
 
-        if drop > max_drop:
-            max_drop = drop
-            drop_point = filtered_rows[i][0]  # elapsedVideoTimeRatio
+    return {"ratio": worst_ratio, "sec": worst_ratio * video_length}
 
-    return drop_point
+
+def build_critical_section(worst_ratio: float, video_length: float) -> dict:
+    """
+    worst_ratio: find_worst_drop()["ratio"]
+    반환: {"startTime": "MM:SS", "endTime": "MM:SS", "duration": int}
+    """
+    worst_sec = worst_ratio * video_length
+
+    # 구간 크기: 영상 길이의 4%, 최소 10초 ~ 최대 300초
+    focus_range = max(10, min(int(0.04 * video_length), 300))
+
+    # 영상 경계를 넘지 않도록 클램핑
+    start_sec = max(0.0, worst_sec - focus_range / 2)
+    end_sec   = min(video_length, worst_sec + focus_range / 2)
+
+    def fmt(sec: float) -> str:
+        m, s = divmod(int(sec), 60)
+        return f"{m:02d}:{s:02d}"
+
+    return {
+        "startTime": fmt(start_sec),
+        "endTime":   fmt(end_sec),
+        "duration":  int(end_sec - start_sec),
+    }
+
+
+VALID_NUM_TICKS = {4, 5, 10, 20, 25, 50, 100}
+
+
+def build_retention_graph(
+    analytics_rows: list,
+    video_length: float,
+    num_ticks: int = 10,  # 100의 약수여야 함
+) -> list:
+    """
+    analytics_rows: 100개 고정 rows [elapsedVideoTimeRatio, audienceWatchRatio, ...]
+    반환: [{"time": "1:24", "retentionRate": 85}, ...]
+    """
+    if not analytics_rows or num_ticks <= 0:
+        return []
+
+    if num_ticks not in VALID_NUM_TICKS:
+        raise ValueError(f"num_ticks는 {VALID_NUM_TICKS} 중 하나여야 합니다: {num_ticks}")
+
+    step = len(analytics_rows) // num_ticks
+
+    # 첫 row 기준으로 정규화 → 영상 시작 시점을 100%로 간주
+    # row[1]이 0이면 divide-by-zero 방지
+    base = analytics_rows[0][1] if analytics_rows[0][1] > 0 else 1.0
+
+    result = []
+    for i in range(num_ticks):
+        row = analytics_rows[i * step]
+        time_sec = row[0] * video_length        # elapsedRatio → 실제 초
+        m, s = divmod(int(time_sec), 60)
+        result.append({
+            "time":          f"{m}:{s:02d}",    # "1:24" 형식 (M:SS, 앞 0 없음)
+            "retentionRate": min(100, round((row[1] / base) * 100)),  # 100 초과 방지
+        })
+    return result
+
+
+def map_grade(score: int) -> str:
+    """0~3: NEEDS_IMPROVEMENT / 4~6: NORMAL / 7~10: GOOD"""
+    if score <= 3:
+        return "NEEDS_IMPROVEMENT"
+    if score <= 6:
+        return "NORMAL"
+    return "GOOD"
