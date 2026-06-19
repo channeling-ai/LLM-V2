@@ -147,10 +147,6 @@ class OverviewResult(BaseModel):
     seo_summary: Optional[ReportSummary] = None
 
 
-class AnalysisResult(BaseModel):
-    """analysis 단계 결과"""
-    viewer_retention: Optional[str] = None
-    optimization: Optional[str] = None
 
 class CommentSummaryItem(BaseModel):
     comment_type: str
