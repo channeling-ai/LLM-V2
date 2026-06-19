@@ -117,14 +117,17 @@ class TranscriptService:
                     # YouTube API 호출
                     structured = await self._fetch_and_structure_async(video_id, languages)
 
-                    # Redis에 캐싱 (30일)
-                    ttl = 30 * 24 * 3600  # 30일
-                    await redis_client.setex(
-                        cache_key,
-                        ttl,
-                        json.dumps(structured, ensure_ascii=False)
-                    )
-                    logger.info(f"💾 Transcript cached (30d TTL): {video_id}")
+                    # Redis에 캐싱 (30일) — 결과가 있을 때만 캐싱
+                    if structured:
+                        ttl = 30 * 24 * 3600  # 30일
+                        await redis_client.setex(
+                            cache_key,
+                            ttl,
+                            json.dumps(structured, ensure_ascii=False)
+                        )
+                        logger.info(f"💾 Transcript cached (30d TTL): {video_id}")
+                    else:
+                        logger.warning(f"⚠️  Transcript 비어 있음, 캐싱 건너뜀: {video_id}")
 
                     return structured
 

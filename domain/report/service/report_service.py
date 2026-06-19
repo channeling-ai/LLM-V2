@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import time
@@ -86,127 +85,80 @@ class ReportService:
             logger.error(f"📄 요약 생성 실패 ({total_time:.2f}초): {e}")
             raise
 
-    async def analyze_viewer_retention(self, video: Video, report_id: int, token: str, skip_vector_save: bool = False) -> bool:
+    async def analyze_viewer_retention(self, video: Video, report_id: int, token: str, skip_vector_save: bool = False, num_ticks: int = 10) -> dict:
         """
-        시청자 이탈 분석 (재시도 로직 포함)
-        
+        시청자 이탈 분석. 분석 결과를 dict로 반환하며 DB 저장은 컨슈머에 위임.
+        벡터 DB 저장(레퍼런스용)은 유지.
+
         Args:
             video: 비디오 객체
             report_id: 리포트 ID
             token: Google 액세스 토큰
             skip_vector_save: Vector DB 저장 스킵 여부 (기본값: False)
-            
+            num_ticks: retention graph 눈금 수 (기본값: 10)
+
         Returns:
-            성공 시 True, 실패 시 False
+            분석 결과 dict (criticalSection, retentionGraph, causes, improvements, expectedEffect)
         """
         start_time = time.time()
         logger.info(f"📊 시청자 이탈 분석 시작 - Report ID: {report_id}")
-        
+
         try:
-            leave_result = None
-            max_retries = 3
-            retry_count = 0
-            
-            # 재시도 로직 (이탈 분석 API 호출)
-            api_start = time.time()
-            while retry_count < max_retries:
-                try:
-                    leave_result = await leave_analyize.analyze_leave(video, token)
-                    api_time = time.time() - api_start
-                    logger.info(f"📈 이탈 분석 API 호출 완료 ({api_time:.2f}초)")
-                    break  # 성공하면 루프 종료
-                    
-                except (AttributeError, TypeError, KeyError):
-                    # 즉시 실패해야 하는 에러들
-                    raise
-                    
-                except Exception as e:
-                    error_type = e.__class__.__name__
-                    
-                    # 네트워크 관련 에러인 경우 재시도
-                    if error_type in ['ConnectTimeout', 'ReadTimeout', 'ConnectionError', 'TimeoutError']:
-                        retry_count += 1
-                        if retry_count < max_retries:
-                            wait_time = retry_count * 5  # 지수 백오프
-                            await asyncio.sleep(wait_time)
-                            continue
-                        else:
-                            # 최대 재시도 초과시 기본값 설정
-                            leave_result = "시청자 이탈 분석 실패 (네트워크 타임아웃)"
-                            break
-                    else:
-                        # 네트워크 에러가 아닌 경우 즉시 종료
-                        raise
-            
-            # Vector DB에 저장 (skip_vector_save가 False인 경우만)
+            leave_result: dict = await leave_analyize.analyze_leave(video, token, num_ticks=num_ticks)
+            logger.info(f"📈 이탈 분석 완료 ({time.time() - start_time:.2f}초)")
+
+            # 레퍼런스용 벡터 DB 저장만 유지 (report_repository.save 제거 — Spring이 Kafka 수신 후 저장)
             if not skip_vector_save:
                 await self.content_chunk_repository.save_context(
                     source_type=SourceTypeEnum.VIEWER_ESCAPE_ANALYSIS,
                     source_id=int(report_id),
-                    context=leave_result
+                    context=json.dumps(leave_result, ensure_ascii=False),
                 )
             else:
                 logger.info("[V2] 벡터 DB 저장을 스킵했습니다.")
-            
-            # PostgreSQL에 저장
-            await self.report_repository.save({
-                "id": report_id,
-                "leave_analyze": leave_result
-            })
-            
-            return True
-            
+
+            return leave_result
+
         except Exception as e:
             raise
 
-    async def analyze_optimization(self, video: Video, report_id: int, skip_vector_save: bool = False) -> bool:
+    async def analyze_optimization(self, video: Video, report_id: int, skip_vector_save: bool = False) -> dict:
         """
-        알고리즘 최적화 분석
-        
+        알고리즘 최적화 분석. 분석 결과를 dict로 반환하며 DB 저장은 컨슈머에 위임.
+        벡터 DB 저장(레퍼런스용)은 유지.
+
         Args:
             video: 비디오 객체
             report_id: 리포트 ID
             skip_vector_save: Vector DB 저장 스킵 여부 (기본값: False)
-            
+
         Returns:
-            성공 시 True, 실패 시 False
+            분석 결과 dict (categoryList, additionalSuggestions, grade 주입 완료)
         """
         start_time = time.time()
         logger.info(f"⚙️ 알고리즘 최적화 분석 시작 - Report ID: {report_id}")
-        
+
         try:
-            # 알고리즘 최적화 분석 (LLM API 호출)
-            opt_start = time.time()
-            analyze_opt = await self.rag_service.analyze_algorithm_optimization(video_id=video.youtube_video_id, skip_vector_save=skip_vector_save)
-            opt_time = time.time() - opt_start
-            logger.info(f"⚙️ 알고리즘 최적화 LLM 분석 완료 ({opt_time:.2f}초)")
-            
-            # Vector DB에 저장 (skip_vector_save가 False인 경우만)
+            analyze_opt: dict = await self.rag_service.analyze_algorithm_optimization(
+                video_id=video.youtube_video_id, skip_vector_save=skip_vector_save
+            )
+            logger.info(f"⚙️ 알고리즘 최적화 LLM 분석 완료 ({time.time() - start_time:.2f}초)")
+
+            # 레퍼런스용 벡터 DB 저장만 유지 (report_repository.save 제거 — Spring이 Kafka 수신 후 저장)
             if not skip_vector_save:
                 await self.content_chunk_repository.save_context(
                     source_type=SourceTypeEnum.ALGORITHM_OPTIMIZATION,
                     source_id=report_id,
-                    context=analyze_opt
+                    context=json.dumps(analyze_opt, ensure_ascii=False),
                 )
             else:
                 logger.info("[V2] 벡터 DB 저장을 스킵했습니다.")
-            
-            # PostgreSQL에 저장
-            pg_start = time.time()
-            await self.report_repository.save({
-                "id": report_id,
-                "optimization": analyze_opt
-            })
-            pg_time = time.time() - pg_start
-            logger.info(f"🗄️ 알고리즘 최적화 분석 PostgreSQL DB 저장 완료 ({pg_time:.2f}초)")
-            
-            total_time = time.time() - start_time
-            logger.info(f"⚙️ 알고리즘 최적화 분석 전체 완료 ({total_time:.2f}초)")
-            return True
-            
+
+            logger.info(f"⚙️ 알고리즘 최적화 분석 전체 완료 ({time.time() - start_time:.2f}초)")
+            return analyze_opt
+
         except Exception as e:
-            total_time = time.time() - start_time
-            logger.error(f"⚙️ 알고리즘 최적화 분석 실패 ({total_time:.2f}초): {e}")
+            logger.error(f"⚙️ 알고리즘 최적화 분석 실패 ({time.time() - start_time:.2f}초): {e}")
             raise
 
     async def analyze_trends_and_save(self, video: Video, report_id: int, skip_vector_save: bool = False) -> bool:
