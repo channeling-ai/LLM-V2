@@ -1,0 +1,290 @@
+"""domain/report/service/report_consumer_impl_v2.py 단위 테스트
+
+handle_overview_v2 / handle_analysis_v2 의 Kafka 발행 흐름 검증.
+핵심 불변식: 성공이든 실패든 항상 정확히 1개의 Kafka 메시지가 발행되어야 함.
+"""
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch, call
+
+
+def _make_consumer():
+    # 생성자에서 DB/Kafka/외부 서비스를 초기화하므로 전부 patch
+    with patch("domain.report.service.report_consumer_impl_v2.RagServiceImpl"), \
+         patch("domain.report.service.report_consumer_impl_v2.VideoRepository"), \
+         patch("domain.report.service.report_consumer_impl_v2.ReportRepository"), \
+         patch("domain.report.service.report_consumer_impl_v2.ContentChunkRepository"), \
+         patch("domain.report.service.report_consumer_impl_v2.ChannelRepository"), \
+         patch("domain.report.service.report_consumer_impl_v2.CommentService"), \
+         patch("domain.report.service.report_consumer_impl_v2.ReportService"), \
+         patch("domain.report.service.report_consumer_impl_v2.TrendKeywordRepository"), \
+         patch("domain.report.service.report_consumer_impl_v2.IdeaService"), \
+         patch("domain.report.service.report_consumer_impl_v2.VideoService"), \
+         patch("domain.report.service.report_consumer_impl_v2.RedisService"), \
+         patch("domain.report.service.report_consumer_impl_v2.kafka_broker") as mock_broker:
+        from domain.report.service.report_consumer_impl_v2 import ReportConsumerImplV2
+        broker = MagicMock()
+        consumer = ReportConsumerImplV2(broker)
+        consumer._mock_broker = mock_broker
+    return consumer
+
+
+def _attach_mocks(consumer):
+    """report/video 조회 성공 케이스용 공통 Mock — report.id=10"""
+    report = MagicMock()
+    report.id = 10
+    video = MagicMock()
+    video.youtube_video_id = "vid1"
+    video.channel_id = 1
+
+    consumer.report_repository = MagicMock()
+    consumer.report_repository.find_by_id = AsyncMock(return_value=report)
+    consumer.video_repository = MagicMock()
+    consumer.video_repository.find_by_id = AsyncMock(return_value=video)
+
+    return report, video
+
+
+# 정상 overview 메시지 기본값
+BASE_OVERVIEW_MSG = {
+    "task_id": 1,
+    "report_id": 10,
+    "google_access_token": "token",
+    "skip_vector_save": False,
+    "start_date": None,
+    "end_date": None,
+    "previous_report_id": None,
+}
+
+# 테스트용 기본 comment_analysis dict (Kafka DTO CommentAnalysis 필드와 동일)
+_BASE_COMMENT_ANALYSIS = {
+    "positive_pct": 60, "negative_pct": 20, "neutral_pct": 10, "advice_pct": 10,
+    "positive_count": 60, "negative_count": 20, "neutral_count": 10, "advice_count": 10,
+    "total_comment_count": 100,
+    "representative_comments": [],
+    "category_summaries": {"positive": "", "negative": "", "neutral": "", "advice": ""},
+}
+
+# 테스트용 기본 metrics dict (Kafka DTO Metrics 필드와 동일)
+_BASE_METRICS = {
+    "view": 1000, "view_channel_avg": 500.0,
+    "like_count": 50, "like_channel_avg": 30.0,
+    "comment_count": 20, "comment_channel_avg": 10.0,
+    "concept": 80.0, "seo": 75.0, "revisit": 5.0,
+}
+
+
+def _attach_overview_mocks(consumer, comment_analysis=None, metrics=None,
+                            summary=None, overview_raw=None, seo_raw=None):
+    """handle_overview_v2 정상 동작에 필요한 서비스 Mock 일괄 설정"""
+    consumer.report_service = MagicMock()
+    consumer.report_service.create_script_summary = AsyncMock(return_value=summary or [])
+    consumer.comment_service = MagicMock()
+    consumer.comment_service.analyze_comments = AsyncMock(
+        return_value=comment_analysis or _BASE_COMMENT_ANALYSIS
+    )
+    consumer.video_service = MagicMock()
+    consumer.video_service.analyze_metrics = AsyncMock(
+        return_value=metrics or _BASE_METRICS
+    )
+    consumer.rag_service = MagicMock()
+    consumer.rag_service.generate_overview_summary = AsyncMock(
+        return_value=overview_raw or {"title": "", "content": ""}
+    )
+    consumer.rag_service.generate_seo_summary = AsyncMock(
+        return_value=seo_raw or {"title": "", "content": ""}
+    )
+
+
+async def _run_overview(consumer, msg=None):
+    """kafka_broker를 가로채서 발행된 메시지 목록을 반환"""
+    published = []
+
+    async def fake_publish(message, topic):
+        published.append((message, topic))
+
+    with patch("domain.report.service.report_consumer_impl_v2.kafka_broker") as mock_broker:
+        mock_broker.publish = fake_publish
+        await consumer.handle_overview_v2(msg or BASE_OVERVIEW_MSG)
+
+    return published
+
+
+# ────────────────────────────────────────────────────────────
+# handle_overview_v2 — 성공/실패 Kafka 발행 흐름
+# ────────────────────────────────────────────────────────────
+
+class TestHandleOverviewV2:
+    def setup_method(self):
+        self.consumer = _make_consumer()
+
+    @pytest.mark.asyncio
+    async def test_success_publishes_is_success_true(self):
+        """3개 병렬 프로세스(요약·댓글·수치) + LLM 요약 모두 성공 → is_success=True 발행"""
+        _attach_mocks(self.consumer)
+        _attach_overview_mocks(
+            self.consumer,
+            summary=[{"time": "0:00", "title": "A", "content": "B"}],
+            overview_raw={"title": "요약제목", "content": "요약내용"},
+            seo_raw={"title": "SEO제목", "content": "SEO내용"},
+        )
+
+        published = await _run_overview(self.consumer)
+
+        assert len(published) == 1
+        msg, topic = published[0]
+        assert msg.is_success is True
+        assert msg.report_id == 10
+        assert msg.task_id == 1
+
+    @pytest.mark.asyncio
+    async def test_failure_publishes_is_success_false(self):
+        """3개 병렬 프로세스 중 하나(create_script_summary)가 실패 → is_success=False 발행
+        실패 메시지도 반드시 1개 발행되어야 Spring이 상태를 알 수 있음"""
+        _attach_mocks(self.consumer)
+        self.consumer.report_service = MagicMock()
+        # 스크립트 요약 실패 시뮬레이션
+        self.consumer.report_service.create_script_summary = AsyncMock(
+            side_effect=RuntimeError("요약 실패")
+        )
+        self.consumer.comment_service = MagicMock()
+        self.consumer.comment_service.analyze_comments = AsyncMock(return_value={})
+        self.consumer.video_service = MagicMock()
+        self.consumer.video_service.analyze_metrics = AsyncMock(return_value={})
+
+        published = await _run_overview(self.consumer)
+
+        assert len(published) == 1
+        msg, _ = published[0]
+        assert msg.is_success is False
+        assert msg.report_id == BASE_OVERVIEW_MSG["report_id"]
+
+    @pytest.mark.asyncio
+    async def test_missing_report_raises_and_publishes_failure(self):
+        """DB에 report가 없으면 ValueError → is_success=False 발행"""
+        # report 조회 실패 케이스 (find_by_id가 None 반환)
+        self.consumer.report_repository = MagicMock()
+        self.consumer.report_repository.find_by_id = AsyncMock(return_value=None)
+
+        published = await _run_overview(self.consumer)
+
+        assert len(published) == 1
+        assert published[0][0].is_success is False
+
+    @pytest.mark.asyncio
+    async def test_positive_pct_below_50_uses_negative_tag(self):
+        """긍정 댓글 비율 < 50% → OverviewTag.NEGATIVE('부정') 태그 결정
+        태그는 LLM이 아닌 규칙 기반: positive_pct >= 50 이면 긍정, 아니면 부정"""
+        _attach_mocks(self.consumer)
+        _attach_overview_mocks(
+            self.consumer,
+            comment_analysis={**_BASE_COMMENT_ANALYSIS, "positive_pct": 40},  # < 50
+            metrics={**_BASE_METRICS, "seo": 65.0},
+        )
+
+        published = await _run_overview(self.consumer)
+
+        assert published[0][0].result.overview_summary.tag == "부정"
+
+    @pytest.mark.asyncio
+    async def test_seo_below_70_uses_needs_optimization_tag(self):
+        """SEO 점수 < 70 → SeoTag.NEEDS_OPTIMIZATION('최적화 필요') 태그 결정
+        태그 기준: seo >= 70 이면 '최적화 원할', 아니면 '최적화 필요'"""
+        _attach_mocks(self.consumer)
+        _attach_overview_mocks(
+            self.consumer,
+            metrics={**_BASE_METRICS, "seo": 50.0},  # < 70
+        )
+
+        published = await _run_overview(self.consumer)
+
+        assert published[0][0].result.seo_summary.tag == "최적화 필요"
+
+    @pytest.mark.asyncio
+    async def test_summary_generation_failure_still_publishes_success(self):
+        """overview_summary / seo_summary LLM 호출 실패 → is_success=True로 발행 유지
+        LLM 요약 실패는 에러 로깅 후 빈 title/content로 대체, 태그는 규칙 기반으로 유지"""
+        _attach_mocks(self.consumer)
+        _attach_overview_mocks(self.consumer)
+        # LLM 요약 생성만 실패 시뮬레이션
+        self.consumer.rag_service.generate_overview_summary = AsyncMock(
+            side_effect=RuntimeError("LLM 타임아웃")
+        )
+        self.consumer.rag_service.generate_seo_summary = AsyncMock(
+            side_effect=RuntimeError("LLM 타임아웃")
+        )
+
+        published = await _run_overview(self.consumer)
+
+        assert len(published) == 1
+        msg = published[0][0]
+        assert msg.is_success is True
+        # LLM 실패 → 빈 문자열 fallback
+        assert msg.result.overview_summary.title == ""
+        assert msg.result.overview_summary.content == ""
+        assert msg.result.seo_summary.title == ""
+        assert msg.result.seo_summary.content == ""
+
+
+# ────────────────────────────────────────────────────────────
+# handle_analysis_v2 — 시청자 이탈 분석 + 알고리즘 최적화 분석
+# ────────────────────────────────────────────────────────────
+
+class TestHandleAnalysisV2:
+    def setup_method(self):
+        self.consumer = _make_consumer()
+
+    @pytest.mark.asyncio
+    async def test_success_publishes_is_success_true(self):
+        """시청자 이탈 분석 + 알고리즘 최적화 분석 모두 성공 → is_success=True 발행"""
+        _attach_mocks(self.consumer)
+        self.consumer.report_service = MagicMock()
+        self.consumer.report_service.analyze_viewer_retention = AsyncMock(return_value=True)
+        self.consumer.report_service.analyze_optimization = AsyncMock(return_value=True)
+
+        published = []
+
+        async def fake_publish(message, topic):
+            published.append((message, topic))
+
+        msg_input = {
+            "task_id": 2, "report_id": 10,
+            "google_access_token": "token",
+            "skip_vector_save": False,
+            "start_date": None, "end_date": None,
+        }
+
+        with patch("domain.report.service.report_consumer_impl_v2.kafka_broker") as mock_broker:
+            mock_broker.publish = fake_publish
+            await self.consumer.handle_analysis_v2(msg_input)
+
+        assert len(published) == 1
+        msg, _ = published[0]
+        assert msg.is_success is True
+
+    @pytest.mark.asyncio
+    async def test_failure_publishes_is_success_false(self):
+        """analyze_viewer_retention 실패 → analyze_optimization은 호출되지 않고 is_success=False 발행"""
+        _attach_mocks(self.consumer)
+        self.consumer.report_service = MagicMock()
+        self.consumer.report_service.analyze_viewer_retention = AsyncMock(
+            side_effect=RuntimeError("분석 실패")
+        )
+        self.consumer.report_service.analyze_optimization = AsyncMock()
+
+        published = []
+
+        async def fake_publish(message, topic):
+            published.append((message, topic))
+
+        msg_input = {
+            "task_id": 2, "report_id": 10,
+            "google_access_token": "token",
+            "skip_vector_save": False,
+        }
+
+        with patch("domain.report.service.report_consumer_impl_v2.kafka_broker") as mock_broker:
+            mock_broker.publish = fake_publish
+            await self.consumer.handle_analysis_v2(msg_input)
+
+        assert len(published) == 1
+        assert published[0][0].is_success is False

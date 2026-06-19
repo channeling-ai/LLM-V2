@@ -1,19 +1,30 @@
 from datetime import date
+from typing import Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException
 
 app = FastAPI()
 
-async def get_youtube_analytics_data(access_token: str, video_id: str, metrics: str, dimensions=None) -> dict:
+async def get_youtube_analytics_data(
+    access_token: str,
+    video_id: str,
+    metrics: str,
+    dimensions=None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict:
     import logging
     logger = logging.getLogger(__name__)
-    
+
+    _start = start_date or "2000-01-01"
+    _end = end_date or str(date.today())
+
     url = (
         "https://youtubeanalytics.googleapis.com/v2/reports"
         "?ids=channel==MINE"
-        "&startDate=1999-01-01"
-        f"&endDate={date.today()}"
+        f"&startDate={_start}"
+        f"&endDate={_end}"
         f"&metrics={metrics}"
         f"&filters=video=={video_id}"
     )

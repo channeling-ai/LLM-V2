@@ -40,3 +40,4 @@ serpapi
 greenlet
 isodate
 tzdata
+json-repair

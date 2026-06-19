@@ -1,13 +1,11 @@
-
 import asyncio
-import json
 import logging
 import time
 from typing import Any, Dict, Optional, Tuple
 
 from core.cache.redis_client import RedisService
 from core.config.kafka_config import kafka_config
-from core.kafka.kafka_broker import kafka_broker
+from core.enums.report_tag import OverviewTag, SeoTag
 from core.kafka.dto.producer_message import (
     AnalysisItem,
     AnalysisResult,
@@ -20,7 +18,13 @@ from core.kafka.dto.producer_message import (
     RetentionGraphPoint,
     Step,
     ViewerRetentionAnalysis,
+    ScriptSection,
+    Metrics,
+    CommentAnalysis,
+    RepresentativeComment,
+    ReportSummary
 )
+from core.kafka.kafka_broker import kafka_broker
 from domain.channel.repository.channel_repository import ChannelRepository
 from domain.comment.service.comment_service import CommentService
 from domain.content_chunk.repository.content_chunk_repository import ContentChunkRepository
@@ -28,16 +32,10 @@ from domain.idea.service.idea_service import IdeaService
 from domain.report.repository.report_repository import ReportRepository
 from domain.report.service.report_consumer import ReportConsumer
 from domain.report.service.report_service import ReportService
-from domain.task.model.task import Status
-from domain.task.repository.task_repository import TaskRepository
-from domain.trend_keyword.model.trend_keyword_type import TrendKeywordType
 from domain.trend_keyword.repository.trend_keyword_repository import TrendKeywordRepository
 from domain.video.repository.video_repository import VideoRepository
 from domain.video.service.video_service import VideoService
-from external.rag import leave_analyize
 from external.rag.rag_service_impl import RagServiceImpl
-from external.youtube.youtube_comment_service import YoutubeCommentService
-
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +45,12 @@ class ReportConsumerImplV2(ReportConsumer):
         self.rag_service = RagServiceImpl()
         self.video_repository = VideoRepository()
         self.report_repository = ReportRepository()
-        self.task_repository = TaskRepository()
         self.content_chunk_repository = ContentChunkRepository()
         self.channel_repository = ChannelRepository()
         self.comment_service = CommentService()
         self.report_service = ReportService()
         self.trend_keyword_repository = TrendKeywordRepository()
         self.idea_service = IdeaService()
-        self.youtube_comment_service = YoutubeCommentService()
         self.video_service = VideoService()
         self.redis_service = RedisService()  # 기본 host/port 사용
 
@@ -63,10 +59,10 @@ class ReportConsumerImplV2(ReportConsumer):
     async def _get_report_and_video(self, message: Dict[str, Any]) -> Optional[Tuple[Any, Any]]:
         """
         메시지에서 report_id를 추출하고 report와 video 정보를 조회하는 공통 메서드
-        
+
         Args:
             message: 처리할 메시지
-            
+
         Returns:
             성공 시 (report, video) 튜플, 실패 시 None
         """
@@ -82,118 +78,114 @@ class ReportConsumerImplV2(ReportConsumer):
             logger.warning(f"report_id={report_id}에 해당하는 보고서가 없습니다.")
             return None
 
-        # Report 정보 로그 출력
-        logger.info(f"보고서 정보: {report}")
-
-        # 연관된 Video 정보 로그 출력
         video_id = getattr(report, "video_id", None)
         video = None
         if video_id:
             video = await self.video_repository.find_by_id(video_id)
-            if video:
-                logger.info(f"연관된 비디오 정보: {video}")
-            else:
-                logger.warning(f"video_id={video_id}에 해당하는 비디오가 없습니다.")
-        else:
-            logger.warning("report에 video_id가 없습니다.")
-            
+            if not video:
+                logger.warning("video_id=%s에 해당하는 비디오가 없습니다.", video_id)
         return report, video
 
-    async def create_summary_update(self, report_id):
-        task = await self.task_repository.find_by_report(report_id)
-        if task.overview_status == Status.COMPLETED and task.analysis_status == Status.COMPLETED:
-            logger.info(f"모든 작업 완료. 요약 생성 시작 (Report {report_id})")
-            await self.report_service.summarize_update_changes(report_id)
-
-
     async def handle_overview_v2(self, message: Dict[str, Any]):
-        logger.info(f"[V2] Handling overview request")
+        logger.info("[V2] Overview 처리 시작")
+        start_time = time.time()
 
-        start_time = time.time()  # 시작 시간 기록
-        user_id = None
+        task_id = message.get("task_id")
+        report_id = message.get("report_id")
+        token = message.get("google_access_token")
+        skip_vector_save = message.get("skip_vector_save", False)
+        start_date = message.get("start_date")
+        end_date = message.get("end_date")
+        previous_report_id = message.get("previous_report_id")
 
         try:
-            # 공통 메서드로 report와 video 정보 조회
             result = await self._get_report_and_video(message)
             if not result:
-                logger.error(f"메시지 정보를 가져오지 못했습니다. 메시지: {message}")
-                raise
-
+                raise ValueError(f"메시지 정보 조회 실패: {message}")
             report, video = result
             report_id = report.id
 
-            # 요약 프로세스 (skip_vector_save=True)
-            skip_vector_save = message.get("skip_vector_save", False)
-            logger.info(f"[V2] skip_vector_save: {skip_vector_save}")
+            # 이전 리포트 조회 (재생성 시 비교용)
+            previous_report = None
+            if previous_report_id:
+                previous_report = await self.report_repository.find_by_id(previous_report_id)
 
+            # 3개 프로세스 병렬 실행
+            summary, comment_analysis, metrics = await asyncio.gather(
+                self.report_service.create_script_summary(video, report_id, skip_vector_save=skip_vector_save),
+                self.comment_service.analyze_comments(video, report_id, start_date=start_date, end_date=end_date),
+                self.video_service.analyze_metrics(video, report_id, token, start_date=start_date, end_date=end_date),
+            )
+
+            # overview_summary / seo_summary — 실패해도 성공 메시지 발행
+            positive_pct = comment_analysis.get("positive_pct", 0)
+            overview_tag = OverviewTag.POSITIVE if positive_pct >= 50 else OverviewTag.NEGATIVE
+            seo_tag = SeoTag.OPTIMIZED if metrics.get("seo", 0) >= 70 else SeoTag.NEEDS_OPTIMIZATION
+
+            overview_summary = ReportSummary(title="", content="", tag=overview_tag)
+            seo_summary = ReportSummary(title="", content="", tag=seo_tag)
             try:
-                await self.report_service.create_summary(video, report_id, skip_vector_save=skip_vector_save)
-            except Exception as e:
-                logger.error(f"요약 프로세스 실패: {e!r}")
-                raise
-
-            # 댓글 프로세스
-            try:
-                await self.comment_service.analyze_comments(video, report_id)
-            except Exception as e:
-                logger.error(f"댓글 프로세스 실패: {e!r}")
-                raise
-
-            # 수치 정보 프로세스
-            try:
-                token = message.get("google_access_token")
-                await self.video_service.analyze_metrics(video, report_id, token)
-            except Exception as e:
-                logger.error(f"수치 정보 프로세스 실패: {e!r}")
-                raise
-
-
-            # task 정보 업데이트
-            task = await self.task_repository.find_by_id(message["task_id"])
-            if task:
-
-                logger.info(f"Kafka publish 시작: topic={kafka_config.report_result_v3}, report_id={report.id}, task_id={task.id}")
-                await kafka_broker.publish(
-                    Message(
-                        is_success=True,
-                        task_id=task.id,
-                        report_id=report.id,
-                        step=Step.overview,
-                        result=OverviewResult(
-                            summary="summary_test",
-                            comment_analysis="comment_test",
-                        )
+                raw_overview, raw_seo = await asyncio.gather(
+                    self.rag_service.generate_overview_summary(
+                        metrics=metrics,
+                        comment_analysis=comment_analysis,
+                        previous_report=previous_report,
                     ),
-                    topic=kafka_config.report_result_v3
+                    self.rag_service.generate_seo_summary(
+                        seo_score=metrics.get("seo", 0),
+                    ),
                 )
-                logger.info(f"Kafka publish 완료: topic={kafka_config.report_result_v3}")
+                overview_summary = ReportSummary(
+                    title=raw_overview.get("title", ""),
+                    content=raw_overview.get("content", ""),
+                    tag=overview_tag,
+                )
+                seo_summary = ReportSummary(
+                    title=raw_seo.get("title", ""),
+                    content=raw_seo.get("content", ""),
+                    tag=seo_tag,
+                )
+            except Exception as e:
+                logger.error("[V2] overview_summary/seo_summary 생성 실패 (report_id=%s): %s", report_id, e)
 
-            await self.create_summary_update(report.id)
+            # Kafka 결과 발행
+            await kafka_broker.publish(
+                Message(
+                    is_success=True,
+                    task_id=task_id,
+                    report_id=report_id,
+                    step=Step.overview,
+                    result=OverviewResult(
+                        summary=[ScriptSection(**s) for s in summary],
+                        metrics=Metrics(**metrics),
+                        comment_analysis=CommentAnalysis(
+                            **{k: v for k, v in comment_analysis.items() if k != "representative_comments"},
+                            representative_comments=[
+                                RepresentativeComment(**c)
+                                for c in comment_analysis.get("representative_comments", [])
+                            ],
+                        ),
+                        overview_summary=overview_summary,
+                        seo_summary=seo_summary,
+                    ),
+                ),
+                topic=kafka_config.report_result_v3,
+            )
+            logger.info("[V2] Overview 결과 발행 완료 (%.2f초)", time.time() - start_time)
 
         except Exception as e:
-            logger.error(f"handle_overview 처리 중 오류 발생: {e}")
-            # task 정보 업데이트
-            task = await self.task_repository.find_by_id(message["task_id"])
-            if task:
-                await self.task_repository.save({
-                    "id": task.id,
-                    "overview_status": Status.FAILED
-                })
-                await kafka_broker.publish(
-                    Message(
-                        is_success=False,
-                        task_id=task.id,
-                        report_id=message.get("report_id"),
-                        step=Step.overview,
-                    ),
-                    topic=kafka_config.report_result_v3
-                )
+            logger.error("handle_overview 처리 중 오류 발생: %s", e)
+            await kafka_broker.publish(
+                Message(
+                    is_success=False,
+                    task_id=task_id,
+                    report_id=report_id,
+                    step=Step.overview,
+                ),
+                topic=kafka_config.report_result_v3,
+            )
         finally:
-            end_time = time.time()  # 종료 시간 기록
-            elapsed_time = end_time - start_time
-            logger.info(f"[V2] handle_overview 전체 처리 시간: {elapsed_time:.3f}초")
-
-        
+            logger.info("[V2] handle_overview 전체 처리 시간: %.3f초", time.time() - start_time)
 
     async def handle_analysis_v2(self, message: Dict[str, Any]):
         """보고서 분석 요청 처리 — 결과를 Kafka로 발행, Task 상태는 Spring이 관리"""
@@ -206,6 +198,7 @@ class ReportConsumerImplV2(ReportConsumer):
         num_ticks = message.get("num_ticks", 10)
 
         try:
+            # 공통 메서드로 report와 video 정보 조회
             result = await self._get_report_and_video(message)
             if not result:
                 raise ValueError(f"report/video 조회 실패: report_id={report_id_raw}")
@@ -292,55 +285,23 @@ class ReportConsumerImplV2(ReportConsumer):
             if not result:
                 return
             report, video = result
-            report_id = report.id
-            # 트렌드 분석 및 키워드 저장 프로세스 (skip_vector_save=True)
             skip_vector_save = message.get("skip_vector_save", False)
-            logger.info(f"[V2] skip_vector_save: {skip_vector_save}")
-            
-            try:
-                await self.report_service.analyze_trends_and_save(video, report_id, skip_vector_save=skip_vector_save)
-            except Exception as e:
-                logger.error(f"트렌드 분석 및 키워드 저장 프로세스 실패: {e!r}")
-                raise
-                
-            # 채널 정보는 아이디어 서비스에서 필요하므로 조회
+
+            await self.report_service.analyze_trends_and_save(video, report.id, skip_vector_save=skip_vector_save)
+
             channel_id = getattr(video, "channel_id", None)
             if not channel_id:
                 logger.error("video에 channel_id가 없습니다.")
                 return
-                
+
             channel = await self.channel_repository.find_by_id(channel_id)
             if not channel:
-                logger.warning(f"channel_id={channel_id}에 해당하는 채널이 없습니다.")
+                logger.warning("channel_id=%s에 해당하는 채널이 없습니다.", channel_id)
                 return
 
-            # 아이디어 생성 프로세스
-            try:
-                await self.idea_service.create_idea(video, channel, report_id)
-            except Exception as e:
-                logger.error(f"아이디어 생성 프로세스 실패: {e!r}")
-                raise
-
-            # task 업데이트
-            task = await self.task_repository.find_by_id(message["task_id"])
-            if task:
-                await self.task_repository.save({
-                    "id": task.id,
-                    "idea_status": Status.COMPLETED
-                })
-                logger.info(f"Task ID {task.id}의 idea_status를 COMPLETED로 업데이트했습니다.")
+            await self.idea_service.create_idea(video, channel, report.id)
 
         except Exception as e:
-            logger.error(f"handle_idea 처리 중 오류 발생: {e!r}")
-            # task 정보 업데이트
-            task = await self.task_repository.find_by_id(message["task_id"])
-            if task:
-                await self.task_repository.save({
-                    "id": task.id,
-                    "idea_status": Status.FAILED
-                })
-                logger.info(f"Task ID {task.id}의 idea_status를 FAILED로 업데이트했습니다.")
+            logger.error("handle_idea 처리 중 오류 발생: %s", e)
         finally:
-            end_time = time.time()  # 종료 시간 기록
-            elapsed_time = end_time - start_time
-            logger.info(f"[V2] handle_idea 처리 완료 (소요 시간: {elapsed_time:.2f}초)")
+            logger.info("[V2] handle_idea 처리 완료 (%.2f초)", time.time() - start_time)

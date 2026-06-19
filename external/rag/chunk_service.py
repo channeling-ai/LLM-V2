@@ -215,7 +215,7 @@ async def create_meaning_chunks_with_focus(
 
 
 
-    for i in range(len(summary_list)):
+    for i in range(min(len(summary_list), len(row_list))):
         print(summary_list[i][0],summary_list[i][1], summary_list[i][2],  row_list[i][0], row_list[i][1])
         chunk_meta={
         'chunk_type': 'mean',        # 청킹 타입
