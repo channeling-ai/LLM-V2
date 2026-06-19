@@ -43,6 +43,9 @@ class BaseConsumer(ABC):
             auto_commit=self.config.consumer_enable_auto_commit,
             auto_commit_interval_ms=self.config.consumer_auto_commit_interval_ms,
             isolation_level="read_committed",
+            session_timeout_ms=self.config.consumer_session_timeout_ms,
+            heartbeat_interval_ms=self.config.consumer_heartbeat_interval_ms,
+            max_poll_interval_ms=self.config.consumer_max_poll_interval_ms,
         )
         async def message_processor(message: Dict[str, Any]):
             try:
