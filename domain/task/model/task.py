@@ -7,9 +7,9 @@ from sqlalchemy import Column, Enum as SAEnum
 
 class Status(str, Enum):
     """작업 상태 Enum"""
-    PENDING = "pending"  # 대기 중
-    COMPLETED = "completed"  # 완료
-    FAILED = "failed"  # 실패
+    PENDING = "PENDING"  # 대기 중
+    COMPLETED = "COMPLETED"  # 완료
+    FAILED = "FAILED"  # 실패
 
 
 class Task(SQLModel, table=True):
