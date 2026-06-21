@@ -13,7 +13,7 @@ class Comment(SQLModel, table=True):
     
     id: Optional[int] = Field(default=None, primary_key=True)
     report_id: int = Field(foreign_key="report.id", description="리포트 ID")
-    comment_type: str = Field(
+    comment_type: CommentType = Field(
         sa_column=Column(
             SAEnum(CommentType, name="commenttype", native_enum=False),
             nullable=False

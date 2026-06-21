@@ -2,7 +2,7 @@ from datetime import datetime
 from core.utils.datetime_utils import get_kst_now_naive
 from typing import Optional
 from sqlmodel import SQLModel, Field, Column
-from sqlalchemy import Text
+from sqlalchemy import Text, JSON
 
 
 class Report(SQLModel, table=True):
@@ -35,7 +35,7 @@ class Report(SQLModel, table=True):
     revisit: int = Field(description="재방문률")
 
     # 텍스트 분석
-    summary: str = Field(sa_column=Column(Text), description="요약본")
+    summary: str = Field(sa_column=Column(JSON), description="요약본")
 
     # 댓글 감정 분석 (수치)
     neutral_comment: int = Field(description="중립 댓글 수")
@@ -48,19 +48,19 @@ class Report(SQLModel, table=True):
     negative_comment_percent: Optional[float] = Field(default=None, description="부정 댓글 비율")
     neutral_comment_percent: Optional[float] = Field(default=None, description="중립 댓글 비율")
     advice_comment_percent: Optional[float] = Field(default=None, description="조언 댓글 비율")
-    comment_summary: Optional[str] = Field(default=None, sa_column=Column(Text), description="댓글 분석")
+    comment_summary: Optional[str] = Field(default=None, sa_column=Column(JSON), description="댓글 분석")
 
     # 분석 결과
     leave_analyze: str = Field(sa_column=Column(Text), description="시청자 이탈 분석")
     optimization: str = Field(sa_column=Column(Text), description="알고리즘 최적화")
 
     # 요약본
-    overview_summary: Optional[str] = Field(default=None, sa_column=Column(Text), description="개요 요약본")
-    retention_summary: Optional[str] = Field(default=None, sa_column=Column(Text), description="유지율 요약본")
-    seo_summary: Optional[str] = Field(default=None, sa_column=Column(Text), description="SEO 요약본")
+    overview_summary: Optional[str] = Field(default=None, sa_column=Column(JSON), description="개요 요약본")
+    retention_summary: Optional[str] = Field(default=None, sa_column=Column(JSON), description="유지율 요약본")
+    seo_summary: Optional[str] = Field(default=None, sa_column=Column(JSON), description="SEO 요약본")
 
     # 시청 유지율 그래프 (10포인트 JSON 배열) - BE: retentionGraph
-    retention_graph: Optional[str] = Field(default=None, sa_column=Column(Text), description="시청 유지율 그래프")
+    retention_graph: Optional[list] = Field(default=None, sa_column=Column(JSON), description="시청 유지율 그래프")
     
     # BaseEntity 상속 부분 (created_at, updated_at)
     created_at: Optional[datetime] = Field(default_factory=get_kst_now_naive)
