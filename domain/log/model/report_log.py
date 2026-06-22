@@ -21,15 +21,12 @@ class ReportLog(SQLModel, table=True):
     title: Optional[str] = None  # 영상 제목
 
     view: Optional[int] = None  # 조회수 (Long -> int)
-    view_topic_avg: Optional[float] = None  # 동일 주제 평균 조회수 (Double -> float)
     view_channel_avg: Optional[float] = None  # 채널 평균 조회수
 
     like_count: Optional[int] = None  # 좋아요 수
-    like_topic_avg: Optional[float] = None  # 동일 주제 평균 좋아요 수
     like_channel_avg: Optional[float] = None  # 채널 평균 좋아요 수
 
     comment: Optional[int] = None  # 댓글 수
-    comment_topic_avg: Optional[float] = None  # 동일 주제 평균 댓글 수
     comment_channel_avg: Optional[float] = None  # 채널 평균 댓글 수 (Java 주석엔 좋아요 수로 되어있으나 변수명상 댓글 수로 추정)
 
     concept: Optional[int] = None  # 컨셉 일관성

@@ -5,6 +5,7 @@ from sqlalchemy import Column
 from sqlmodel import SQLModel, Field
 
 from core.enums.video_category import VideoCategory
+from core.utils.datetime_utils import get_kst_now_naive
 from sqlalchemy import Column, Enum as SAEnum
 
 
@@ -27,6 +28,10 @@ class Video(SQLModel, table=True):
     upload_date: Optional[datetime] = Field(description="업로드 날짜")
     thumbnail: Optional[str] = Field(description="썸네일 URL")
     description: Optional[str] = Field(description="비디오 설명")
+
+    # BaseEntity 상속 부분 (created_at, updated_at)
+    created_at: Optional[datetime] = Field(default_factory=get_kst_now_naive)
+    updated_at: Optional[datetime] = Field(default_factory=get_kst_now_naive)
     # data v3
     # duration : Optional[int] = Field(description="비디오 길이 (초 단위)")
     # analytics 항목
