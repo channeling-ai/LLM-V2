@@ -264,11 +264,13 @@ Google Trends 데이터를 기반으로 현재 가장 주목받는 키워드를 
 {{
     "trends": [
         {{
-            "keyword": "트렌드 키워드",
+            "keyword": "입력 데이터의 keyword 값을 변경 없이 그대로 사용",
             "score": 85
         }}
     ]
 }}
+
+주의: keyword 값은 반드시 입력 데이터(trends_data)의 keyword 필드 값을 그대로 복사해야 합니다. 번역, 축약, 변형 금지.
 
 주의사항:
 - 반드시 주석(// 등) 없이 유효한 JSON 형식으로만 출력

@@ -179,7 +179,8 @@ class ReportService:
                         "report_id": report_id,
                         "keyword_type": TrendKeywordType.REAL_TIME,
                         "keyword": keyword_data.get("keyword", ""),
-                        "score": keyword_data.get("score", 0)
+                        "score": keyword_data.get("score", 0),
+                        "started_at": keyword_data.get("started_at"),
                     }
                     realtime_keywords_to_save.append(trend_keyword)
                 

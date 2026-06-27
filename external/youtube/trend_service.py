@@ -1,9 +1,9 @@
 import os
 import json
 from typing import List, Dict, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
-import requests
 import serpapi
 
 load_dotenv()
@@ -75,7 +75,7 @@ class TrendService:
                     "increase_percentage": search.get("increase_percentage", 0),
                     "categories": [cat.get("name", "") for cat in search.get("categories", [])],
                     "trend_breakdown": search.get("trend_breakdown", []),
-                    "started_at": datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M") if start_ts else None,
+                    "started_at": datetime.fromtimestamp(start_ts, tz=ZoneInfo("Asia/Seoul")).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M") if start_ts else None,
                 }
                 trends.append(trend)
         

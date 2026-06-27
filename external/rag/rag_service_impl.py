@@ -423,9 +423,13 @@ class RagServiceImpl(RagService):
             result = json.loads(clean_json_str)
 
             # raw_trends의 started_at을 LLM 결과 키워드에 역매칭
-            started_at_map = {t["keyword"]: t.get("started_at") for t in raw_trends}
+            started_at_map = {t.get("keyword", ""): t.get("started_at") for t in raw_trends}
             for trend in result.get("trends", []):
-                trend["started_at"] = started_at_map.get(trend.get("keyword"))
+                kw = trend.get("keyword", "")
+                started_at = started_at_map.get(kw)
+                if started_at is None:
+                    logger.warning(f"started_at 역매칭 실패 — LLM 키워드가 원본과 다를 수 있음: '{kw}'")
+                trend["started_at"] = started_at
 
             return result
         except json.JSONDecodeError:

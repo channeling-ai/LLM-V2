@@ -27,8 +27,8 @@ class TrendKeywordService:
     async def delete_past_realtime_keyword_if_exist(self):
         logger.info(f"[delete_realtime_keyword] 과거 실시간 트렌드 키워드 조회 시작")
 
-        # 실제 repository 메서드 호출
-        latest_channel_keywords = await self.trend_keyword_repository.get_latest_real_time_keywords()
+        # 실제 repository 메서드 호출 (삭제 대상은 전체 조회)
+        latest_channel_keywords = await self.trend_keyword_repository.get_latest_real_time_keywords(limit=1000)
         if latest_channel_keywords:
             logger.info(f"[delete_realtime_keyword]  기존 키워드 {len(latest_channel_keywords)}개 발견")
             # bulk 삭제 호출 

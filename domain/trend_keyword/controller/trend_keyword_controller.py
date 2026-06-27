@@ -69,6 +69,10 @@ async def create_channel_keyword(channel_id: int):
     channel_concept = getattr(channel, "concept", "")
     target_audience = getattr(channel, "target", "")
 
+    # 삭제 전 이전 score 백업 (LLM 호출 전에 수행해야 race condition 방지)
+    existing_channel_keywords = await trend_keyword_repository.get_latest_channel_keywords(channel_id)
+    previous_score_map = {kw.keyword: kw.score for kw in existing_channel_keywords}
+
     # 실시간 트랜드 상위 5개 가져오기
     latest_trend_keywords = await trend_keyword_repository.get_latest_real_time_keywords()
 
@@ -79,10 +83,6 @@ async def create_channel_keyword(channel_id: int):
         latest_trend_keywords=latest_trend_keywords
     )
     logger.info(f"채널 맞춤형 트렌드 LLM 응답: {channel_keyword}")
-
-    # 삭제 전 이전 score 백업
-    existing_channel_keywords = await trend_keyword_repository.get_latest_channel_keywords(channel_id)
-    previous_score_map = {kw.keyword: kw.score for kw in existing_channel_keywords}
 
     # 기존 채널 맞춤형 키워드 존재 시 삭제
     await trend_keyword_service.delete_past_chennel_keyword_if_exist(channel_id)
