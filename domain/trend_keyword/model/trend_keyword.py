@@ -43,6 +43,9 @@ class TrendKeyword(SQLModel, table=True):
     # 키워드 트렌드 시작 시각 (Google Trends start_timestamp)
     started_at: Optional[datetime] = Field(default=None)
 
+    # 직전 수집 점수 (점수 변동 비교용)
+    previous_score: Optional[int] = Field(default=None)
+
     # BaseEntity 상속 부분 (created_at, updated_at)
     created_at: Optional[datetime] = Field(default_factory=get_kst_now_naive)
     updated_at: Optional[datetime] = Field(default_factory=get_kst_now_naive)
