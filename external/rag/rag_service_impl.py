@@ -421,6 +421,12 @@ class RagServiceImpl(RagService):
         try:
             clean_json_str = result_str.strip().replace("```json", "").replace("```", "")
             result = json.loads(clean_json_str)
+
+            # raw_trends의 started_at을 LLM 결과 키워드에 역매칭
+            started_at_map = {t["keyword"]: t.get("started_at") for t in raw_trends}
+            for trend in result.get("trends", []):
+                trend["started_at"] = started_at_map.get(trend.get("keyword"))
+
             return result
         except json.JSONDecodeError:
             logger.error(f"실시간 트렌드 LLM 응답 JSON 파싱 실패 - 원본 응답: {result_str}")

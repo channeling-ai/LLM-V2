@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter
 import logging
 from external.rag.rag_service_impl import RagServiceImpl
@@ -35,11 +36,14 @@ async def create_real_time_keyword():
                 score = int(keyword_data.get("score", 0))
             except (ValueError, TypeError):
                 score = 0
+            started_at_str = keyword_data.get("started_at")
+            started_at = datetime.strptime(started_at_str, "%Y-%m-%d %H:%M") if started_at_str else None
             trend_keyword = {
                 "channel_id":  None,
                 "keyword_type": TrendKeywordType.REAL_TIME,
                 "keyword": keyword_data.get("keyword", ""),
-                "score": score
+                "score": score,
+                "started_at": started_at,
             }
             realtime_keywords_to_save.append(trend_keyword)
 

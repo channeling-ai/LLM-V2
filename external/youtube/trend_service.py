@@ -68,12 +68,14 @@ class TrendService:
             trending_searches = results["trending_searches"]
             
             for search in trending_searches[:limit]:
+                start_ts = search.get("start_timestamp")
                 trend = {
                     "keyword": search.get("query", ""),
-                    "search_volume": search.get("search_volume", 0),    # 검색량
-                    "increase_percentage": search.get("increase_percentage", 0),    # 증가율
-                    "categories": [cat.get("name", "") for cat in search.get("categories", [])],    # 카테고리
-                    "trend_breakdown": search.get("trend_breakdown", [])   # 트렌드 세부 정보
+                    "search_volume": search.get("search_volume", 0),
+                    "increase_percentage": search.get("increase_percentage", 0),
+                    "categories": [cat.get("name", "") for cat in search.get("categories", [])],
+                    "trend_breakdown": search.get("trend_breakdown", []),
+                    "started_at": datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M") if start_ts else None,
                 }
                 trends.append(trend)
         
