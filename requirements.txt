@@ -26,7 +26,9 @@ langchain-openai
 langchain==0.3.27
 
 # Kafka
-faststream[kafka]
+# 0.6.0에서 subscriber()의 auto_commit/auto_commit_interval_ms 인자가 제거됨(→ ack_policy로 대체).
+# base_consumer.py가 auto_commit 방식을 쓰므로 0.5.x로 고정. (버전 안 박으면 리빌드 때 0.6.x로 올라가 깨짐)
+faststream[kafka]>=0.5,<0.6
 python-snappy==0.7.3
 
 # Google API
