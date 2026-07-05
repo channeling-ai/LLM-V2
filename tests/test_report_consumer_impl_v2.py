@@ -288,3 +288,97 @@ class TestHandleAnalysisV2:
 
         assert len(published) == 1
         assert published[0][0].is_success is False
+
+
+# ────────────────────────────────────────────────────────────
+# handle_recommend_v2 — 추천 리포트 (토큰 없이 생성, 유저 무관)
+# ────────────────────────────────────────────────────────────
+
+_BASE_VIDEO_DETAILS = {
+    "title": "제목", "description": "설명",
+    "viewCount": 1234, "likeCount": 56, "commentCount": 78,
+}
+
+BASE_RECOMMEND_MSG = {
+    "recommend_report_id": 5,
+    "user_id": 7,
+    "youtube_video_id": "vid1",
+}
+
+
+class TestHandleRecommendV2:
+    def setup_method(self):
+        self.consumer = _make_consumer()
+
+    def _attach_recommend_mocks(self, details=None):
+        self.consumer.video_detail_service = MagicMock()
+        self.consumer.video_detail_service.get_video_details = AsyncMock(
+            return_value=details if details is not None else _BASE_VIDEO_DETAILS
+        )
+        self.consumer.report_service = MagicMock()
+        self.consumer.report_service.create_script_summary = AsyncMock(
+            return_value=[{"time": "0:00", "title": "A", "content": "B"}]
+        )
+        self.consumer.report_service.analyze_optimization = AsyncMock(
+            return_value={"categoryList": [], "additionalSuggestions": []}
+        )
+        self.consumer.comment_service = MagicMock()
+        self.consumer.comment_service.analyze_comments = AsyncMock(
+            return_value=_BASE_COMMENT_ANALYSIS
+        )
+
+    async def _run(self, msg=None):
+        published = []
+
+        async def fake_publish(message, topic):
+            published.append((message, topic))
+
+        with patch("domain.report.service.report_consumer_impl_v2.kafka_broker") as mock_broker:
+            mock_broker.publish = fake_publish
+            await self.consumer.handle_recommend_v2(msg or BASE_RECOMMEND_MSG)
+
+        return published
+
+    @pytest.mark.asyncio
+    async def test_success_publishes_result_with_public_metrics(self):
+        """요약+댓글+지표+최적화 조립 성공 → is_success=True, 공개 지표만 포함(토큰 미사용)"""
+        self._attach_recommend_mocks()
+
+        published = await self._run()
+
+        assert len(published) == 1
+        msg, topic = published[0]
+        assert topic == "recommend-report-result-v2"
+        assert msg.is_success is True
+        assert msg.recommend_report_id == 5
+        assert msg.user_id == 7
+        # 공개 지표는 video_detail에서 직접 — view/like/comment
+        assert msg.result["metrics"] == {"view": 1234, "like_count": 56, "comment_count": 78}
+        # 유저 토큰 필요한 필드 부재 (seo수치/revisit/retention 없음)
+        assert "seo" not in msg.result["metrics"]
+        assert "revisit" not in msg.result["metrics"]
+
+    @pytest.mark.asyncio
+    async def test_video_details_missing_publishes_failure(self):
+        """영상 상세 조회 실패 → is_success=False 발행 (Spring이 FAILED 처리)"""
+        self._attach_recommend_mocks(details={})
+
+        published = await self._run()
+
+        assert len(published) == 1
+        msg, topic = published[0]
+        assert topic == "recommend-report-result-v2"
+        assert msg.is_success is False
+        assert msg.recommend_report_id == 5
+
+    @pytest.mark.asyncio
+    async def test_skip_vector_save_is_true(self):
+        """추천 리포트는 유저 종속 벡터 저장 불필요 → skip_vector_save=True로 재사용 서비스 호출"""
+        self._attach_recommend_mocks()
+
+        await self._run()
+
+        self.consumer.report_service.create_script_summary.assert_awaited_once()
+        assert self.consumer.report_service.create_script_summary.await_args.kwargs["skip_vector_save"] is True
+        self.consumer.report_service.analyze_optimization.assert_awaited_once()
+        assert self.consumer.report_service.analyze_optimization.await_args.kwargs["skip_vector_save"] is True

@@ -22,7 +22,10 @@ from core.kafka.dto.producer_message import (
     Metrics,
     CommentAnalysis,
     RepresentativeComment,
-    ReportSummary
+    ReportSummary,
+    RecommendResult,
+    RecommendMetrics,
+    RecommendMessage,
 )
 from core.kafka.kafka_broker import kafka_broker
 from domain.channel.repository.channel_repository import ChannelRepository
@@ -33,9 +36,11 @@ from domain.report.repository.report_repository import ReportRepository
 from domain.report.service.report_consumer import ReportConsumer
 from domain.report.service.report_service import ReportService
 from domain.trend_keyword.repository.trend_keyword_repository import TrendKeywordRepository
+from domain.video.model.video import Video
 from domain.video.repository.video_repository import VideoRepository
 from domain.video.service.video_service import VideoService
 from external.rag.rag_service_impl import RagServiceImpl
+from external.youtube.video_detail_service import VideoDetailService
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +57,7 @@ class ReportConsumerImplV2(ReportConsumer):
         self.trend_keyword_repository = TrendKeywordRepository()
         self.idea_service = IdeaService()
         self.video_service = VideoService()
+        self.video_detail_service = VideoDetailService()
         self.redis_service = RedisService()  # 기본 host/port 사용
 
  
@@ -305,3 +311,97 @@ class ReportConsumerImplV2(ReportConsumer):
             logger.error("handle_idea 처리 중 오류 발생: %s", e)
         finally:
             logger.info("[V2] handle_idea 처리 완료 (%.2f초)", time.time() - start_time)
+
+    async def handle_recommend_v2(self, message: Dict[str, Any]):
+        """
+        추천 리포트 생성 — 유저 토큰/소유 엔티티 없이 youtube_video_id로 직접 조립.
+        스크립트 요약 + 댓글 분석 + 공개 지표 + 알고리즘 최적화 (이탈/seo수치/revisit 제외).
+        영상당 1회 생성 후 Spring이 DB 캐시하여 전원 공유.
+        """
+        logger.info("[V2] Recommend 처리 시작")
+        start_time = time.time()
+
+        recommend_report_id = message.get("recommend_report_id")
+        user_id = message.get("user_id")
+        youtube_video_id = message.get("youtube_video_id")
+
+        try:
+            if not youtube_video_id:
+                raise ValueError("youtube_video_id가 메시지에 없습니다")
+
+            # 공개 상세 (제목/설명/view/like/comment) — 서버 키, 유저 토큰 불필요
+            details = await self.video_detail_service.get_video_details(youtube_video_id)
+            if not details:
+                raise ValueError(f"영상 상세 조회 실패: {youtube_video_id}")
+
+            # 경량 video 뷰 — 재사용 서비스는 youtube_video_id만 참조 (§R1)
+            video = Video(
+                youtube_video_id=youtube_video_id,
+                title=details.get("title"),
+                description=details.get("description"),
+                view=details.get("viewCount", 0),
+                like_count=details.get("likeCount", 0),
+                comment_count=details.get("commentCount", 0),
+            )
+
+            # skip_vector_save=True — 추천 리포트는 유저 종속 벡터 저장 불필요
+            summary, comment_analysis, optimization = await asyncio.gather(
+                self.report_service.create_script_summary(video, recommend_report_id, skip_vector_save=True),
+                self.comment_service.analyze_comments(video, recommend_report_id),
+                self.report_service.analyze_optimization(video, recommend_report_id, skip_vector_save=True),
+            )
+
+            result = RecommendResult(
+                summary=[ScriptSection(**s) for s in summary],
+                comment_analysis=CommentAnalysis(
+                    **{k: v for k, v in comment_analysis.items() if k != "representative_comments"},
+                    representative_comments=[
+                        RepresentativeComment(**c)
+                        for c in comment_analysis.get("representative_comments", [])
+                    ],
+                ),
+                metrics=RecommendMetrics(
+                    view=details.get("viewCount", 0),
+                    like_count=details.get("likeCount", 0),
+                    comment_count=details.get("commentCount", 0),
+                ),
+                algorithm_optimization=AlgorithmOptimization(
+                    category_list=[
+                        CategoryItem(
+                            category=cat["category"],
+                            score=cat["score"],
+                            grade=cat["grade"],
+                            issues=[IssueItem(**iss) for iss in cat.get("issues", [])],
+                        )
+                        for cat in optimization.get("categoryList", [])
+                    ],
+                    additional_suggestions=optimization.get("additionalSuggestions", []),
+                ),
+            )
+
+            await kafka_broker.publish(
+                RecommendMessage(
+                    is_success=True,
+                    recommend_report_id=recommend_report_id,
+                    user_id=user_id,
+                    result=result.model_dump(by_alias=True),
+                ),
+                topic=kafka_config.recommend_result_v2,
+            )
+            logger.info("[V2] Recommend 결과 발행 완료 (%.2f초)", time.time() - start_time)
+
+        except Exception as e:
+            logger.error("[V2] handle_recommend 처리 중 오류: %s", e, exc_info=True)
+            try:
+                await kafka_broker.publish(
+                    RecommendMessage(
+                        is_success=False,
+                        recommend_report_id=recommend_report_id,
+                        user_id=user_id,
+                    ),
+                    topic=kafka_config.recommend_result_v2,
+                )
+            except Exception as pub_err:
+                logger.error("[V2] Recommend 실패 알림 발행 실패: %r", pub_err)
+        finally:
+            logger.info("[V2] handle_recommend 전체 처리 시간: %.3f초", time.time() - start_time)
