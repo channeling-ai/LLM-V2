@@ -40,6 +40,14 @@ class YoutubeCommentService:
 
         return all_comments
 
+    async def get_relevant_comments(self, video_id: str, count: int = 50) -> list[dict]:
+        """영상의 인기(relevance) 댓글 상위 count개 반환 (대시보드 라이브 수집용).
+
+        report_id 없이 조회하므로 저장하지 않는다. 댓글 비활성/에러면 [] (_fetch_comments가 흡수).
+        count<=100이면 페이지네이션 없이 API 1호출.
+        """
+        return await self._fetch_comments(video_id, report_id=None, order="relevance", max_count=count)
+
     async def get_total_comment_count(self, video_id: str) -> int:
         """YouTube stats에서 실제 총 댓글 수 조회"""
         try:

@@ -53,6 +53,11 @@ class KafkaConfig(BaseSettings):
     # V3 결과 발행 토픽 (FastAPI → Spring)
     report_result_v3: str = "report-result-v3"
 
+    # 대시보드 토픽 (#14) — 요청 수신 / 결과 발행
+    dashboard_topic_v2: str = "dashboard-topic-v2"
+    dashboard_result_v3: str = "dashboard-result-v3"
+    dashboard_consumer_group_id: str = "llm-dashboard-group"
+
     class Config:
         # 환경 변수에서 설정값을 읽어옴
         env_prefix = "KAFKA_"
