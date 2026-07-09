@@ -151,3 +151,28 @@ class OverviewResult(BaseModel):
 class CommentSummaryItem(BaseModel):
     comment_type: str
     content: str
+
+
+# ── Recommend (추천 리포트 — 토큰 없이 생성, 유저 무관) ──────────────────────────
+
+class RecommendMetrics(BaseModel):
+    """추천 리포트 공개 지표 (토큰 불필요 — 채널 평균/컨셉/seo/revisit 제외)"""
+    view: int
+    like_count: int
+    comment_count: int
+
+
+class RecommendResult(BaseModel):
+    """recommend 단계 결과 — 스크립트 요약 + 댓글 분석 + 공개 지표 + 알고리즘 최적화"""
+    summary: List[ScriptSection]
+    comment_analysis: CommentAnalysis
+    metrics: RecommendMetrics
+    algorithm_optimization: AlgorithmOptimization
+
+
+class RecommendMessage(BaseModel):
+    """FastAPI → Spring 추천 리포트 결과 메시지 (recommend-report-result-v2)"""
+    is_success: bool
+    recommend_report_id: int
+    user_id: int
+    result: Optional[Any] = None
