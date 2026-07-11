@@ -43,3 +43,4 @@ greenlet
 isodate
 tzdata
 json-repair
+numpy  # domain/video/service/video_service.py 에서 사용
