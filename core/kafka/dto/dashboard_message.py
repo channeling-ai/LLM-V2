@@ -36,9 +36,25 @@ class DashboardScores(CamelModel):
     upload: ScoreItem
 
 
+class GraphPointScores(CamelModel):
+    """그래프 소급 포인트 1개의 지표 6종. delta 없음(그래프 스펙엔 score만 필요)."""
+    growth: Optional[int] = None
+    algorithm: Optional[int] = None
+    retention: Optional[int] = None
+    engagement: Optional[int] = None
+    inflow: Optional[int] = None
+    upload: Optional[int] = None
+
+
+class GraphPoint(CamelModel):
+    date: str  # yyyy-MM-dd (KST) — 이 포인트가 나타내는 실제 달력 날짜
+    scores: GraphPointScores
+
+
 class DashboardScoresPayload(CamelModel):
     scores: DashboardScores
     subscriber_delta: Optional[int] = None  # 한 달(28일) 구독자 순증감. 데이터 부족 → None
+    graph_points: List[GraphPoint] = []  # 오늘(offset=0) 제외, 그래프용 소급 포인트 (score만)
 
 
 # ── step=suggestions payload (camelCase) ─────────────────────────────────

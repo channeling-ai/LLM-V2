@@ -214,3 +214,12 @@ def calculate_all(
         }
         for name, fn in _SCORE_FNS.items()
     }
+
+
+def calculate_scores_only(current: WindowSum, baseline: WindowSum) -> dict[str, Optional[int]]:
+    """6개 지표의 score만 `{지표: score}`로 반환 (delta 미계산).
+
+    그래프 소급 포인트(과거 앵커)는 delta가 필요 없어 previous 윈도우 합산을 생략할 수 있다 —
+    `calculate_all`보다 가벼움.
+    """
+    return {name: fn(current, baseline) for name, fn in _SCORE_FNS.items()}
