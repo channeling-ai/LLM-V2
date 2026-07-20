@@ -54,6 +54,7 @@ class SuggestionItem(CamelModel):
 
 class DashboardSuggestionsPayload(CamelModel):
     suggestions: List[SuggestionItem]
+    summary_message: Optional[str] = None  # "현재 채널 상황 정리" 종합 문단. 생성 실패 시 None
 
 
 # ── 봉투 (snake_case) ────────────────────────────────────────────────────

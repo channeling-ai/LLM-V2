@@ -166,6 +166,36 @@ _GENERAL_GROWTH_PROMPT = """너는 유튜브 채널 성장 코치다. 아래 채
 
 """ + _QUALITATIVE_RULE
 
+_SITUATION_SUMMARY_PROMPT = """너는 유튜브 채널 성장 코치다. 아래는 이 채널에 대해 이미 분석된
+사실들이다. 이 사실들'만' 근거로 삼아, 지금 채널 상태를 진단하는 종합 요약을 작성하라.
+
+문체 가이드 (여러 사실을 한 문장에 엮어 자신감 있게 진단하는 톤 — 아래 예시의 소재·숫자는
+문체 참고용일 뿐, 그대로 베끼거나 채널에 없는 숫자를 새로 지어내지 마라):
+  예) "○○ 콘텐츠가 조회수를 견인하지만 구독 전환은 △△가 담당하며, 전반적으로는 완만한
+      성장 곡선을 그리고 있는 단계입니다."
+  예) "업로드 주기와 시청 지속률이 안정적으로 유지되며 견조한 성장세를 보이는 상태입니다."
+
+채널명: {name}
+채널 컨셉: {concept}
+
+[보유 지표] (여기 없는 지표는 데이터가 없다는 뜻이니 언급하지 마라)
+{available_scores}
+
+[생성된 조언 카드]
+{card_summaries}
+
+지침:
+- 위 문체처럼 여러 사실을 하나의 흐름으로 엮되, 숫자는 [보유 지표]/[생성된 조언 카드]에
+  나온 것만 인용하라.
+- 여기 없는 수치(특정 영상의 조회수 증가율, 재방문율, 시청자 잔존율, 만족도% 등)는 채널
+  단위로 우리가 갖고 있지 않다. 절대로 새로운 수치를 지어내지 마라.
+- 지표가 부족하거나 낮아도 실패로 단정하지 말고, "~단계", "~상태" 같은 진단형 어미로
+  1~2문장에 마무리하라.
+
+반드시 아래 JSON 형식으로만 답하라(JSON 외 다른 말 금지):
+{{"summary": "종합 요약 문장"}}
+"""
+
 _SCORE_LABELS = {
     "growth": "채널 성장",
     "algorithm": "알고리즘",
@@ -182,6 +212,34 @@ def _format_score_summary(scores: dict) -> str:
         score = (scores.get(key) or {}).get("score")
         lines.append(f"- {label}: {'데이터 없음' if score is None else f'{score}점'}")
     return "\n".join(lines)
+
+
+def _format_available_scores(scores: dict) -> str:
+    """null인 지표는 아예 제외하고 있는 것만 나열 (situation summary 전용, SITUATION_SUMMARY_SPEC.md §3-1)."""
+    lines = [
+        f"- {label}: {(scores.get(key) or {}).get('score')}점"
+        for key, label in _SCORE_LABELS.items()
+        if (scores.get(key) or {}).get("score") is not None
+    ]
+    return "\n".join(lines) if lines else "(보유 지표 없음)"
+
+
+_SUGGESTION_TYPE_LABELS = {
+    "VIRAL_VIDEO": "역주행",
+    "CONTENT_EFFICIENCY": "콘텐츠 효율 진단",
+    "GENERAL_GROWTH": "일반 성장 분석",
+    "TREND_KEYWORD": "트렌드 브릿지",
+    "COMMENT_SENTIMENT": "댓글 인사이트",
+}
+
+
+def _format_cards_for_summary(items: list[SuggestionItem]) -> str:
+    """방금 생성된 카드들의 title+summary를 그대로 나열 (새 사실 지어내지 않고 재사용)."""
+    blocks = []
+    for item in items:
+        label = _SUGGESTION_TYPE_LABELS.get(item.type, item.type)
+        blocks.append(f"[{label}] {item.title} — {item.summary}")
+    return "\n".join(blocks) if blocks else "(생성된 카드 없음)"
 
 
 def _parse_card_json(raw: str) -> Optional[dict]:
@@ -269,6 +327,29 @@ class SuggestionService:
                 logger.warning("[Dashboard] suggestion 카드 생성 실패(%s) - channel_id=%s: %r",
                                name, channel_id, e)
         return items
+
+    async def summarize_situation(self, channel, scores, items: list[SuggestionItem]) -> Optional[str]:
+        """"현재 채널 상황 정리" 종합 문단 생성 (SITUATION_SUMMARY_SPEC.md).
+
+        카드 생성이 이미 끝난 뒤의 독립적인 후처리 — 실패해도 카드 발행에는 영향 없음(호출부에서
+        try/except로 격리해야 함). 분석 기반 1(카드)+3(점수)만 사용, 새 사실을 지어내지 않도록
+        이미 생성된 카드 텍스트와 null 아닌 점수만 근거로 준다.
+        """
+        if not items:
+            logger.info("[Dashboard] 카드 없음 → situation summary skip (channel_id=%s)",
+                        getattr(channel, "id", None))
+            return None
+
+        prompt = _SITUATION_SUMMARY_PROMPT.format(
+            name=getattr(channel, "name", "") or "",
+            concept=getattr(channel, "concept", None) or "미설정",
+            available_scores=_format_available_scores(scores),
+            card_summaries=_format_cards_for_summary(items),
+        )
+        raw = await self.rag.execute_llm_direct(prompt)
+        parsed = _parse_card_json(raw)
+        summary = (parsed or {}).get("summary")
+        return summary.strip() if isinstance(summary, str) and summary.strip() else None
 
     # ── 카드: 역주행 영상 ──────────────────────────────────────────────────
     async def _viral_video(self, channel, access_token) -> Optional[SuggestionItem]:

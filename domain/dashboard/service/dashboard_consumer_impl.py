@@ -124,7 +124,15 @@ class DashboardConsumerImpl(BaseConsumer):
                 items = await self.suggestion_service.generate(channel, scores, day_map, access_token=token)
                 logger.info("[Dashboard] suggestions 생성됨 - 개수=%d, types=%s (%.0fms)",
                             len(items), [i.type for i in items], (time.time() - t0) * 1000)
-                payload = DashboardSuggestionsPayload(suggestions=items)
+
+                # "현재 채널 상황 정리" 종합 문단 — 카드 생성 이후 독립 후처리, 실패해도 카드 발행엔 영향 없음
+                try:
+                    summary_message = await self.suggestion_service.summarize_situation(channel, scores, items)
+                except Exception as e:
+                    logger.warning("[Dashboard] situation summary 생성 실패 - channel_id=%s: %r", channel_id, e)
+                    summary_message = None
+
+                payload = DashboardSuggestionsPayload(suggestions=items, summary_message=summary_message)
                 await kafka_broker.publish(
                     DashboardMessage(
                         is_success=True,
