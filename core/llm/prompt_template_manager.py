@@ -407,6 +407,30 @@ Google Trends 데이터를 기반으로 현재 가장 주목받는 키워드를 
 답변:""".strip()
 
     @staticmethod
+    def get_analysis_summary_prompt() -> str:
+        """analysis_summary 생성 프롬프트 - 시청자 이탈 분석 기반 한줄 요약"""
+        return """
+당신은 유튜브 시청자 이탈 분석 전문가입니다.
+제공된 최대 이탈 구간과 원인/개선점 데이터를 바탕으로 이탈 분석을 요약하세요.
+
+지침:
+- title: 이탈이 발생한 구간을 한 문장으로 (15자 이내, 예: "2분대 이탈 발생")
+- content: 이탈 구간과 핵심 개선점을 구체적으로 (60자 이내, "해요체" 사용)
+- tag는 출력하지 마세요 (서버가 지표로 결정합니다).
+
+백틱(```)이나 추가 설명 없이 순수 JSON만 출력하세요.
+
+출력 형식:
+{{
+  "title": "2분대 이탈 발생",
+  "content": "2분 6초~2분 55초 구간에서 이탈이 집중되고 있어요. 편집 템포 조절이 필요해요."
+}}
+
+질문: {input}
+문서 내용: {context}
+답변:""".strip()
+
+    @staticmethod
     def get_overview_summary_prompt() -> str:
         """overview_summary 생성 프롬프트 - 지표 + 댓글 기반"""
         return """

@@ -143,6 +143,27 @@ class RagServiceImpl(RagService):
             logger.error("seo_summary JSON 파싱 오류: %s, 원본: %s", e, result[:300])
             return {"title": "", "content": "", "tag": "개선"}
 
+    async def generate_analysis_summary(self, retention_data: Dict[str, Any]) -> Dict[str, str]:
+        """analysis_summary 생성 - 시청자 이탈 분석 기반 한줄 요약 (tag 제외)"""
+        context = json.dumps(
+            {
+                "criticalSection": retention_data.get("criticalSection"),
+                "causes": retention_data.get("causes"),
+                "improvements": retention_data.get("improvements"),
+                "expectedEffect": retention_data.get("expectedEffect"),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+        query = "시청자 이탈 분석 결과를 바탕으로 이탈 요약을 작성해주세요."
+        result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_analysis_summary_prompt())
+
+        try:
+            return _parse_json(result)
+        except json.JSONDecodeError as e:
+            logger.error("analysis_summary JSON 파싱 오류: %s, 원본: %s", e, result[:300])
+            return {"title": "", "content": ""}
+
     async def classify_comment(self, comment: str) -> Dict[str, Any]:
         query = "유튜브 댓글을 분석하여 감정을 분류하고 백틱(```)이나 설명 없이 순수 JSON으로 출력해주세요."
         result = await self.execute_llm_chain(comment, query, PromptTemplateManager.get_comment_reaction_prompt())
