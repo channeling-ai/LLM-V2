@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from core.cache.redis_client import RedisService
 from core.config.kafka_config import kafka_config
-from core.enums.report_tag import OverviewTag, SeoTag
+from core.enums.report_tag import OverviewTag, SeoTag, RetentionTag
 from core.kafka.dto.producer_message import (
     AnalysisItem,
     AnalysisResult,
@@ -224,9 +224,30 @@ class ReportConsumerImplV2(ReportConsumer):
                 skip_vector_save=skip_vector_save,
             )
 
+            # analysis_summary — 실패해도 분석 결과는 발행 (overview_summary와 동일 패턴)
+            # tag는 코드가 결정: retentionGraph 평균 retention_rate >= 50 → 양호, 미만 → 개선 필요
+            graph = retention_data.get("retentionGraph", [])
+            avg_retention = (
+                sum(p.get("retentionRate", 0) for p in graph) / len(graph) if graph else 0
+            )
+            analysis_tag = (
+                RetentionTag.GOOD if avg_retention >= 50 else RetentionTag.NEEDS_IMPROVEMENT
+            )
+            analysis_summary = ReportSummary(title="", content="", tag=analysis_tag)
+            try:
+                raw_analysis = await self.rag_service.generate_analysis_summary(retention_data)
+                analysis_summary = ReportSummary(
+                    title=raw_analysis.get("title", ""),
+                    content=raw_analysis.get("content", ""),
+                    tag=analysis_tag,
+                )
+            except Exception as e:
+                logger.error("[V2] analysis_summary 생성 실패 (report_id=%s): %s", report.id, e)
+
             # DTO 조립 — Pydantic 모델로 타입 보장 및 camelCase 직렬화
             analysis_result = AnalysisResult(
                 report_id=report.id,
+                analysis_summary=analysis_summary,
                 viewer_retention_analysis=ViewerRetentionAnalysis(
                     critical_section=CriticalSection(**retention_data["criticalSection"]),
                     retention_graph=[

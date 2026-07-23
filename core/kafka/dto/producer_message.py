@@ -84,6 +84,7 @@ class AnalysisResult(CamelModel):
     report_id: int
     viewer_retention_analysis: Optional[ViewerRetentionAnalysis] = None
     algorithm_optimization: Optional[AlgorithmOptimization] = None
+    analysis_summary: Optional["ReportSummary"] = None
 
 
 # ── Overview ────────────────────────────────────────────────────────

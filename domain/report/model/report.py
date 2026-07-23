@@ -56,7 +56,7 @@ class Report(SQLModel, table=True):
 
     # 요약본
     overview_summary: Optional[str] = Field(default=None, sa_column=Column(JSON), description="개요 요약본")
-    retention_summary: Optional[str] = Field(default=None, sa_column=Column(JSON), description="유지율 요약본")
+    analysis_summary: Optional[str] = Field(default=None, sa_column=Column(JSON), description="유지율 요약본")
     seo_summary: Optional[str] = Field(default=None, sa_column=Column(JSON), description="SEO 요약본")
 
     # 시청 유지율 그래프 (10포인트 JSON 배열) - BE: retentionGraph
