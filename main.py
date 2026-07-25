@@ -8,6 +8,7 @@ from core.config.database_config import test_pg_connection
 from core.cache.redis_client import get_redis_client, RedisClient
 from core.kafka.kafka_broker import kafka_broker
 from domain.idea.controller.idea_controller import router as idea_router
+from domain.report.controller.dummy_report_controller import router as dummy_report_router
 from domain.trend_keyword.controller.trend_keyword_controller import router as trend_router
 
 from response.api_response import ApiResponse
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 # 라우터 등록
 app.include_router(idea_router)
 app.include_router(trend_router)
+app.include_router(dummy_report_router)
 
 @app.on_event("startup")
 async def on_startup():
