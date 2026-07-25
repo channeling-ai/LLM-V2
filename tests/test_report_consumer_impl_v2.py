@@ -311,19 +311,21 @@ class TestHandleRecommendV2:
         self.consumer = _make_consumer()
 
     def _attach_recommend_mocks(self, details=None):
-        self.consumer.video_detail_service = MagicMock()
-        self.consumer.video_detail_service.get_video_details = AsyncMock(
+        # 본문 조립은 RecommendGenerator에 위임되므로 generator가 든 참조를 갈아끼운다
+        gen = self.consumer.recommend_generator
+        gen.video_detail_service = MagicMock()
+        gen.video_detail_service.get_video_details = AsyncMock(
             return_value=details if details is not None else _BASE_VIDEO_DETAILS
         )
-        self.consumer.report_service = MagicMock()
-        self.consumer.report_service.create_script_summary = AsyncMock(
+        gen.report_service = MagicMock()
+        gen.report_service.create_script_summary = AsyncMock(
             return_value=[{"time": "0:00", "title": "A", "content": "B"}]
         )
-        self.consumer.report_service.analyze_optimization = AsyncMock(
+        gen.report_service.analyze_optimization = AsyncMock(
             return_value={"categoryList": [], "additionalSuggestions": []}
         )
-        self.consumer.comment_service = MagicMock()
-        self.consumer.comment_service.analyze_comments = AsyncMock(
+        gen.comment_service = MagicMock()
+        gen.comment_service.analyze_comments = AsyncMock(
             return_value=_BASE_COMMENT_ANALYSIS
         )
 
@@ -378,7 +380,8 @@ class TestHandleRecommendV2:
 
         await self._run()
 
-        self.consumer.report_service.create_script_summary.assert_awaited_once()
-        assert self.consumer.report_service.create_script_summary.await_args.kwargs["skip_vector_save"] is True
-        self.consumer.report_service.analyze_optimization.assert_awaited_once()
-        assert self.consumer.report_service.analyze_optimization.await_args.kwargs["skip_vector_save"] is True
+        report_service = self.consumer.recommend_generator.report_service
+        report_service.create_script_summary.assert_awaited_once()
+        assert report_service.create_script_summary.await_args.kwargs["skip_vector_save"] is True
+        report_service.analyze_optimization.assert_awaited_once()
+        assert report_service.analyze_optimization.await_args.kwargs["skip_vector_save"] is True
