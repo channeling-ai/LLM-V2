@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 ANALYTICS_URL = "https://youtubeanalytics.googleapis.com/v2/reports"
 FINALIZE_LAG = 3      # YouTube 지표 확정(T-3)
-BACKFILL_DEPTH = 120  # baseline 하한: anchor(today-3)-117 = today-120 (현재28 + 직전90 = 118일치, anchor 기준)
+BACKFILL_DEPTH = 148  # baseline 하한: 그래프 최원거리 앵커(today-28-3)-117 = today-148
+                       # (score_calculation.GRAPH_OFFSETS 최댓값 28을 커버. 범위 API는 기간
+                       #  길이와 무관하게 호출 수가 고정이라, 깊이만 늘려도 API 호출 증가 없음 —
+                       #  같은 day_map에서 앵커만 바꿔 그래프 소급 포인트까지 함께 계산한다)
 
 _CORE_METRICS = "subscribersGained,subscribersLost,views,averageViewPercentage,likes,comments,shares"
 

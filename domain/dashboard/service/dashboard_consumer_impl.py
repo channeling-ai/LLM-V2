@@ -24,6 +24,8 @@ from core.kafka.dto.dashboard_message import (
     DashboardScoresPayload,
     DashboardStep,
     DashboardSuggestionsPayload,
+    GraphPoint,
+    GraphPointScores,
     ScoreItem,
 )
 from core.kafka.kafka_broker import kafka_broker
@@ -31,6 +33,7 @@ from domain.channel.repository.channel_repository import ChannelRepository
 from domain.dashboard.service import raw_metrics_collector
 from domain.dashboard.service.score_calculation import (
     build_day_map,
+    calculate_score_series,
     calculate_scores,
     calculate_subscriber_delta,
 )
@@ -102,12 +105,14 @@ class DashboardConsumerImpl(BaseConsumer):
             day_map = build_day_map(rows)
             scores = calculate_scores(day_map, today)
             subscriber_delta = calculate_subscriber_delta(day_map, today)
-            logger.info("[Dashboard] 4️⃣ 점수 계산 완료 - %s subscriberDelta=%s (%.0fms)",
+            graph_points = calculate_score_series(day_map, today)
+            logger.info("[Dashboard] 4️⃣ 점수 계산 완료 - %s subscriberDelta=%s graphPoints=%d개 (%.0fms)",
                         self._fmt_scores(scores),
                         "N/A" if subscriber_delta is None else f"{subscriber_delta:+d}",
+                        len(graph_points),
                         (time.time() - t0) * 1000)
 
-            await self._publish_scores(channel_id, dashboard_date_str, scores, subscriber_delta)
+            await self._publish_scores(channel_id, dashboard_date_str, scores, subscriber_delta, graph_points)
             logger.info("[Dashboard] ✅ scores 발행 완료 - channel_id=%s, topic=%s (누적 %.2f초)",
                         channel_id, kafka_config.dashboard_result_v3, time.time() - start_time)
         except Exception as e:
@@ -170,7 +175,8 @@ class DashboardConsumerImpl(BaseConsumer):
                 counts[d] = counts.get(d, 0) + 1
         return counts
 
-    async def _publish_scores(self, channel_id, dashboard_date_str, scores, subscriber_delta=None):
+    async def _publish_scores(self, channel_id, dashboard_date_str, scores, subscriber_delta=None,
+                              graph_points=None):
         payload = DashboardScoresPayload(
             scores=DashboardScores(
                 growth=ScoreItem(**scores["growth"]),
@@ -181,6 +187,10 @@ class DashboardConsumerImpl(BaseConsumer):
                 upload=ScoreItem(**scores["upload"]),
             ),
             subscriber_delta=subscriber_delta,
+            graph_points=[
+                GraphPoint(date=p["date"], scores=GraphPointScores(**p["scores"]))
+                for p in (graph_points or [])
+            ],
         )
         await kafka_broker.publish(
             DashboardMessage(

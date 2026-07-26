@@ -17,13 +17,17 @@ import logging
 from datetime import date, timedelta
 from typing import Optional
 
-from domain.dashboard.service.score_formulas import WindowSum, calculate_all
+from domain.dashboard.service.score_formulas import WindowSum, calculate_all, calculate_scores_only
 
 logger = logging.getLogger(__name__)
 
 CURRENT_DAYS = 28
 BASELINE_DEPTH = 117
 FINALIZE_LAG = 3      # 지표 확정 지연 → 윈도우 기준점 anchor=today-3 (raw_metrics_collector와 일치)
+
+GRAPH_OFFSETS = (3, 5, 7, 14, 21, 28)
+# BE PeriodType 그래프 오프셋: WEEK{7,5,3,0} ∪ MONTH{28,21,14,7,0} 통합, 0(오늘)은
+# calculate_scores가 이미 계산하므로 제외. 그래프는 delta가 필요 없어 score만 계산한다.
 
 
 def _num(v) -> float:
@@ -106,6 +110,31 @@ def calculate_scores(day_map: dict[date, dict], today: date) -> dict[str, dict[s
 
     scores = calculate_all(current, previous, baseline)
     return scores
+
+
+def calculate_score_series(
+    day_map: dict[date, dict], today: date, offsets: tuple[int, ...] = GRAPH_OFFSETS
+) -> list[dict]:
+    """그래프 소급 포인트 목록 — offset(며칠 전)별 {"date", "scores"} 리스트.
+
+    같은 day_map(단일 수집 결과)에서 앵커만 offset만큼 과거로 옮겨 계산하므로
+    추가 YouTube API 호출이 발생하지 않는다. delta는 그래프 스펙에 없어 계산하지 않는다
+    (previous 윈도우 합산 생략 → calculate_scores 대비 더 가벼움).
+    """
+    points = []
+    for offset in offsets:
+        point_date = today - timedelta(days=offset)
+        anchor = point_date - timedelta(days=FINALIZE_LAG)
+        cur_start = anchor - timedelta(days=CURRENT_DAYS - 1)
+        current = _window_sum(day_map, cur_start, anchor)
+        baseline = _window_sum(
+            day_map, anchor - timedelta(days=BASELINE_DEPTH), anchor - timedelta(days=CURRENT_DAYS)
+        )
+        points.append({
+            "date": point_date.isoformat(),
+            "scores": calculate_scores_only(current, baseline),
+        })
+    return points
 
 
 def calculate_subscriber_delta(day_map: dict[date, dict], today: date) -> Optional[int]:
