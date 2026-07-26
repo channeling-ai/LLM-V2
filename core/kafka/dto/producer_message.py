@@ -164,11 +164,14 @@ class RecommendMetrics(BaseModel):
 
 
 class RecommendResult(BaseModel):
-    """recommend 단계 결과 — 스크립트 요약 + 댓글 분석 + 공개 지표 + 알고리즘 최적화"""
+    """recommend 단계 결과 — 스크립트 요약 + 댓글 분석 + 공개 지표 + 알고리즘 최적화 + 개요 요약"""
     summary: List[ScriptSection]
     comment_analysis: CommentAnalysis
     metrics: RecommendMetrics
     algorithm_optimization: AlgorithmOptimization
+    # 개요 화면에 함께 내려가는 요약. 생성 실패해도 리포트는 살려야 하므로 빈 값 허용.
+    # seo/analysis 요약은 추천·더미 리포트에 필요한 입력(seo 점수·이탈 데이터)이 없어 만들지 않는다.
+    overview_summary: Optional[ReportSummary] = None
 
 
 class RecommendMessage(BaseModel):

@@ -328,6 +328,10 @@ class TestHandleRecommendV2:
         gen.comment_service.analyze_comments = AsyncMock(
             return_value=_BASE_COMMENT_ANALYSIS
         )
+        gen.rag_service = MagicMock()
+        gen.rag_service.generate_overview_summary = AsyncMock(
+            return_value={"title": "제목", "content": "내용", "tag": "무시됨"}
+        )
 
     async def _run(self, msg=None):
         published = []
@@ -372,6 +376,18 @@ class TestHandleRecommendV2:
         assert topic == "recommend-report-result-v2"
         assert msg.is_success is False
         assert msg.recommend_report_id == 5
+
+    @pytest.mark.asyncio
+    async def test_publishes_overview_summary(self):
+        """개요 요약도 결과에 포함해 발행 — tag는 positive_pct(60) 기준으로 '긍정'"""
+        self._attach_recommend_mocks()
+
+        published = await self._run()
+
+        msg, _ = published[0]
+        assert msg.result["overview_summary"] == {
+            "title": "제목", "content": "내용", "tag": "긍정",
+        }
 
     @pytest.mark.asyncio
     async def test_skip_vector_save_is_true(self):

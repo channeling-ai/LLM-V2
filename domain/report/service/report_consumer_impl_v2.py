@@ -60,6 +60,7 @@ class ReportConsumerImplV2(ReportConsumer):
             report_service=self.report_service,
             comment_service=self.comment_service,
             video_detail_service=self.video_detail_service,
+            rag_service=self.rag_service,
         )
         self.redis_service = RedisService()  # 기본 host/port 사용
 
