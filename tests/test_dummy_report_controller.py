@@ -79,7 +79,7 @@ async def test_returns_four_blobs_and_cost():
     assert set(result) >= {"summary", "comment_analysis", "metrics", "algorithm_optimization",
                            "overview_summary", "video", "cost"}
     assert result["metrics"] == {"view": 1234, "like_count": 56, "comment_count": 78}
-    # Step 1에서는 비용 미집계 — 0으로 내려보내고 BE는 무시한다
+    # LLM을 실제로 타지 않는 목이라 집계값은 0 — 실측 집계는 test_dummy_report_usage.py에서 검증한다
     assert result["cost"] == {"input_tokens": 0, "output_tokens": 0, "usd": 0.0}
 
 
