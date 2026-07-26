@@ -2,9 +2,11 @@ import logging
 from typing import Dict, Optional
 
 from fastapi import APIRouter
+from langchain_core.callbacks.usage import get_usage_metadata_callback
 
-from domain.report.dto.dummy_report_dto import Cost, DummyReportRequest, VideoInfo
+from domain.report.dto.dummy_report_dto import DummyReportRequest, VideoInfo
 from domain.report.service.recommend_generator import RecommendGenerator
+from domain.report.service.usage_cost import to_cost
 from external.youtube.video_detail_service import VideoDetailService
 from response.api_response import ApiResponse
 from response.code.status.success_status import SuccessStatus
@@ -24,23 +26,26 @@ SHORTS_CATEGORY_ID = "42"
 async def create_dummy_report(req: DummyReportRequest):
     """
     체험용 더미 리포트 생성 — 추천 리포트와 동일한 본문을 동기(blocking)로 조립해 즉시 반환한다.
-    Kafka를 쓰지 않는 이유는 Spring이 동기 응답을 기다리기 때문(설계 문서 참고).
     저장은 하지 않는다 — 캐싱은 Spring 책임.
     """
-    result = await recommend_generator.generate(req.youtube_video_id)
+    # 생성 전체를 감싸 이 요청이 쓴 토큰만 집계한다 (contextvar 기반이라 gather 하위 호출까지 합산).
+    # 영상 메타 조회는 LLM을 타지 않으므로 밖에 둔다.
+    with get_usage_metadata_callback() as usage:
+        result = await recommend_generator.generate(req.youtube_video_id)
+        cost = to_cost(usage.usage_metadata)
 
     payload = result.model_dump(by_alias=True)
     payload["video"] = (await _build_video_info(req.youtube_video_id)).model_dump()
-    payload["cost"] = Cost().model_dump()
+    # BE가 일일 예산 상한에 누적하는 값 — 성공 응답에만 실린다(실패는 502라 누적되지 않는다).
+    payload["cost"] = cost.model_dump()
 
     return ApiResponse.on_success(SuccessStatus._OK, payload)
 
 
 async def _build_video_info(youtube_video_id: str) -> VideoInfo:
     """
-    체험 화면에 띄울 영상 메타. get_video_details는 Redis 5분 캐시라
-    직전 generate()가 이미 채워둔 값을 재사용한다 (캐시 장애 시에만 API 1회 추가).
-    메타 실패가 리포트 본문을 날리면 안 되므로 예외는 삼키고 빈 값으로 둔다.
+    체험 화면에 띄울 영상 메타. 
+    직전 generate()가 이미 채워둔 값을 재사용한다 (get_video_details는 Redis 캐시라 캐시 장애 시에만 API 1회 추가).
     """
     try:
         details = await video_detail_service.get_video_details(youtube_video_id)

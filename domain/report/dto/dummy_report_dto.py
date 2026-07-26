@@ -24,8 +24,9 @@ class VideoInfo(BaseModel):
 
 class Cost(BaseModel):
     """
-    생성 비용. Step 1에서는 값을 채우지 않고 0으로 내려보내며 Spring은 무시한다.
-    Step 2(어뷰징 제한)에서 실제 토큰 사용량을 채워 일일 예산 누적에 쓴다.
+    생성 비용. 요청 1건이 실제로 쓴 채팅 모델 토큰과 그 환산 금액이다.
+    Spring이 일일 예산 상한(Step 2)에 누적한다.
+    임베딩 비용은 포함하지 않는다 — 더미/추천 경로는 skip_vector_save=True라 임베딩 호출이 없다.
     """
     input_tokens: int = 0
     output_tokens: int = 0
