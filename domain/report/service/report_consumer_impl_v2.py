@@ -23,8 +23,6 @@ from core.kafka.dto.producer_message import (
     CommentAnalysis,
     RepresentativeComment,
     ReportSummary,
-    RecommendResult,
-    RecommendMetrics,
     RecommendMessage,
 )
 from core.kafka.kafka_broker import kafka_broker
@@ -34,9 +32,9 @@ from domain.content_chunk.repository.content_chunk_repository import ContentChun
 from domain.idea.service.idea_service import IdeaService
 from domain.report.repository.report_repository import ReportRepository
 from domain.report.service.report_consumer import ReportConsumer
+from domain.report.service.recommend_generator import RecommendGenerator
 from domain.report.service.report_service import ReportService
 from domain.trend_keyword.repository.trend_keyword_repository import TrendKeywordRepository
-from domain.video.model.video import Video
 from domain.video.repository.video_repository import VideoRepository
 from domain.video.service.video_service import VideoService
 from external.rag.rag_service_impl import RagServiceImpl
@@ -58,6 +56,12 @@ class ReportConsumerImplV2(ReportConsumer):
         self.idea_service = IdeaService()
         self.video_service = VideoService()
         self.video_detail_service = VideoDetailService()
+        self.recommend_generator = RecommendGenerator(
+            report_service=self.report_service,
+            comment_service=self.comment_service,
+            video_detail_service=self.video_detail_service,
+            rag_service=self.rag_service,
+        )
         self.redis_service = RedisService()  # 기본 host/port 사용
 
  
@@ -350,55 +354,8 @@ class ReportConsumerImplV2(ReportConsumer):
             if not youtube_video_id:
                 raise ValueError("youtube_video_id가 메시지에 없습니다")
 
-            # 공개 상세 (제목/설명/view/like/comment) — 서버 키, 유저 토큰 불필요
-            details = await self.video_detail_service.get_video_details(youtube_video_id)
-            if not details:
-                raise ValueError(f"영상 상세 조회 실패: {youtube_video_id}")
-
-            # 경량 video 뷰 — 재사용 서비스는 youtube_video_id만 참조 (§R1)
-            video = Video(
-                youtube_video_id=youtube_video_id,
-                title=details.get("title"),
-                description=details.get("description"),
-                view=details.get("viewCount", 0),
-                like_count=details.get("likeCount", 0),
-                comment_count=details.get("commentCount", 0),
-            )
-
-            # skip_vector_save=True — 추천 리포트는 유저 종속 벡터 저장 불필요
-            summary, comment_analysis, optimization = await asyncio.gather(
-                self.report_service.create_script_summary(video, recommend_report_id, skip_vector_save=True),
-                self.comment_service.analyze_comments(video, recommend_report_id),
-                self.report_service.analyze_optimization(video, recommend_report_id, skip_vector_save=True),
-            )
-
-            result = RecommendResult(
-                summary=[ScriptSection(**s) for s in summary],
-                comment_analysis=CommentAnalysis(
-                    **{k: v for k, v in comment_analysis.items() if k != "representative_comments"},
-                    representative_comments=[
-                        RepresentativeComment(**c)
-                        for c in comment_analysis.get("representative_comments", [])
-                    ],
-                ),
-                metrics=RecommendMetrics(
-                    view=details.get("viewCount", 0),
-                    like_count=details.get("likeCount", 0),
-                    comment_count=details.get("commentCount", 0),
-                ),
-                algorithm_optimization=AlgorithmOptimization(
-                    category_list=[
-                        CategoryItem(
-                            category=cat["category"],
-                            score=cat["score"],
-                            grade=cat["grade"],
-                            issues=[IssueItem(**iss) for iss in cat.get("issues", [])],
-                        )
-                        for cat in optimization.get("categoryList", [])
-                    ],
-                    additional_suggestions=optimization.get("additionalSuggestions", []),
-                ),
-            )
+            # 본문 조립은 더미 리포트 REST 엔드포인트와 공유한다
+            result = await self.recommend_generator.generate(youtube_video_id, recommend_report_id)
 
             await kafka_broker.publish(
                 RecommendMessage(

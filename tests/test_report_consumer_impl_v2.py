@@ -311,20 +311,26 @@ class TestHandleRecommendV2:
         self.consumer = _make_consumer()
 
     def _attach_recommend_mocks(self, details=None):
-        self.consumer.video_detail_service = MagicMock()
-        self.consumer.video_detail_service.get_video_details = AsyncMock(
+        # 본문 조립은 RecommendGenerator에 위임되므로 generator가 든 참조를 갈아끼운다
+        gen = self.consumer.recommend_generator
+        gen.video_detail_service = MagicMock()
+        gen.video_detail_service.get_video_details = AsyncMock(
             return_value=details if details is not None else _BASE_VIDEO_DETAILS
         )
-        self.consumer.report_service = MagicMock()
-        self.consumer.report_service.create_script_summary = AsyncMock(
+        gen.report_service = MagicMock()
+        gen.report_service.create_script_summary = AsyncMock(
             return_value=[{"time": "0:00", "title": "A", "content": "B"}]
         )
-        self.consumer.report_service.analyze_optimization = AsyncMock(
+        gen.report_service.analyze_optimization = AsyncMock(
             return_value={"categoryList": [], "additionalSuggestions": []}
         )
-        self.consumer.comment_service = MagicMock()
-        self.consumer.comment_service.analyze_comments = AsyncMock(
+        gen.comment_service = MagicMock()
+        gen.comment_service.analyze_comments = AsyncMock(
             return_value=_BASE_COMMENT_ANALYSIS
+        )
+        gen.rag_service = MagicMock()
+        gen.rag_service.generate_overview_summary = AsyncMock(
+            return_value={"title": "제목", "content": "내용", "tag": "무시됨"}
         )
 
     async def _run(self, msg=None):
@@ -372,13 +378,26 @@ class TestHandleRecommendV2:
         assert msg.recommend_report_id == 5
 
     @pytest.mark.asyncio
+    async def test_publishes_overview_summary(self):
+        """개요 요약도 결과에 포함해 발행 — tag는 positive_pct(60) 기준으로 '긍정'"""
+        self._attach_recommend_mocks()
+
+        published = await self._run()
+
+        msg, _ = published[0]
+        assert msg.result["overview_summary"] == {
+            "title": "제목", "content": "내용", "tag": "긍정",
+        }
+
+    @pytest.mark.asyncio
     async def test_skip_vector_save_is_true(self):
         """추천 리포트는 유저 종속 벡터 저장 불필요 → skip_vector_save=True로 재사용 서비스 호출"""
         self._attach_recommend_mocks()
 
         await self._run()
 
-        self.consumer.report_service.create_script_summary.assert_awaited_once()
-        assert self.consumer.report_service.create_script_summary.await_args.kwargs["skip_vector_save"] is True
-        self.consumer.report_service.analyze_optimization.assert_awaited_once()
-        assert self.consumer.report_service.analyze_optimization.await_args.kwargs["skip_vector_save"] is True
+        report_service = self.consumer.recommend_generator.report_service
+        report_service.create_script_summary.assert_awaited_once()
+        assert report_service.create_script_summary.await_args.kwargs["skip_vector_save"] is True
+        report_service.analyze_optimization.assert_awaited_once()
+        assert report_service.analyze_optimization.await_args.kwargs["skip_vector_save"] is True
