@@ -9,7 +9,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 _VIDEO_DETAILS = {
     "title": "제목", "description": "설명",
     "viewCount": 1234, "likeCount": 56, "commentCount": 78,
+    "categoryId": "22",
+    "publishedAt": "2026-01-02T03:04:05Z",
+    "channelTitle": "채널",
+    "thumbnails": {
+        "default": {"url": "https://d"},
+        "medium": {"url": "https://m"},
+        "high": {"url": "https://h"},
+    },
 }
+
+
+def _patch_video_meta(details=None):
+    """컨트롤러가 영상 메타용으로 따로 호출하는 서비스 — 테스트에서 실제 API를 타지 않게 막는다."""
+    from domain.report.controller import dummy_report_controller as ctrl
+
+    stub = MagicMock()
+    stub.get_video_details = AsyncMock(
+        return_value=details if details is not None else _VIDEO_DETAILS
+    )
+    return patch.object(ctrl, "video_detail_service", stub)
 
 _COMMENT_ANALYSIS = {
     "positive_pct": 25.0, "negative_pct": 25.0, "neutral_pct": 25.0, "advice_pct": 25.0,
@@ -48,12 +67,12 @@ async def test_returns_four_blobs_and_cost():
     from domain.report.controller import dummy_report_controller as ctrl
     from domain.report.dto.dummy_report_dto import DummyReportRequest
 
-    with patch.object(ctrl, "recommend_generator", _generator_with_mocks()):
+    with patch.object(ctrl, "recommend_generator", _generator_with_mocks()), _patch_video_meta():
         res = await ctrl.create_dummy_report(DummyReportRequest(youtube_video_id="vid1"))
 
     assert res["isSuccess"] is True
     result = res["result"]
-    assert set(result) >= {"summary", "comment_analysis", "metrics", "algorithm_optimization", "cost"}
+    assert set(result) >= {"summary", "comment_analysis", "metrics", "algorithm_optimization", "video", "cost"}
     assert result["metrics"] == {"view": 1234, "like_count": 56, "comment_count": 78}
     # Step 1에서는 비용 미집계 — 0으로 내려보내고 BE는 무시한다
     assert result["cost"] == {"input_tokens": 0, "output_tokens": 0, "usd": 0.0}
@@ -65,9 +84,58 @@ async def test_video_details_missing_raises():
     from domain.report.controller import dummy_report_controller as ctrl
     from domain.report.dto.dummy_report_dto import DummyReportRequest
 
-    with patch.object(ctrl, "recommend_generator", _generator_with_mocks(details={})):
+    with patch.object(ctrl, "recommend_generator", _generator_with_mocks(details={})), _patch_video_meta():
         with pytest.raises(ValueError):
             await ctrl.create_dummy_report(DummyReportRequest(youtube_video_id="vid1"))
+
+
+@pytest.mark.asyncio
+async def test_video_meta_matches_be_contract():
+    """BE 계약 — DummyReportResDTO.VideoInfo가 읽는 snake_case 키와 값 규칙"""
+    from domain.report.controller import dummy_report_controller as ctrl
+    from domain.report.dto.dummy_report_dto import DummyReportRequest
+
+    with patch.object(ctrl, "recommend_generator", _generator_with_mocks()), _patch_video_meta():
+        res = await ctrl.create_dummy_report(DummyReportRequest(youtube_video_id="vid1"))
+
+    assert res["result"]["video"] == {
+        "video_title": "제목",
+        "video_thumbnail_url": "https://h",   # high > medium > default
+        "video_type": "LONG",                  # categoryId 22 → 롱폼
+        "video_created_date": "2026-01-02T03:04:05",  # Z 제거, Spring LocalDateTime용
+        "channel_name": "채널",
+    }
+
+
+@pytest.mark.asyncio
+async def test_shorts_category_is_shorts():
+    """롱폼/숏폼은 재생시간이 아니라 카테고리 42 기준 (일반 리포트와 동일 규칙)"""
+    from domain.report.controller import dummy_report_controller as ctrl
+    from domain.report.dto.dummy_report_dto import DummyReportRequest
+
+    shorts = {**_VIDEO_DETAILS, "categoryId": "42"}
+    with patch.object(ctrl, "recommend_generator", _generator_with_mocks()), _patch_video_meta(shorts):
+        res = await ctrl.create_dummy_report(DummyReportRequest(youtube_video_id="vid1"))
+
+    assert res["result"]["video"]["video_type"] == "SHORTS"
+
+
+@pytest.mark.asyncio
+async def test_video_meta_failure_does_not_break_report():
+    """메타 조회가 실패해도 리포트 본문은 그대로 나가야 한다 (BE는 video=null로 처리)"""
+    from domain.report.controller import dummy_report_controller as ctrl
+    from domain.report.dto.dummy_report_dto import DummyReportRequest
+
+    stub = MagicMock()
+    stub.get_video_details = AsyncMock(side_effect=RuntimeError("quota exceeded"))
+
+    with patch.object(ctrl, "recommend_generator", _generator_with_mocks()), \
+            patch.object(ctrl, "video_detail_service", stub):
+        res = await ctrl.create_dummy_report(DummyReportRequest(youtube_video_id="vid1"))
+
+    assert res["isSuccess"] is True
+    assert res["result"]["video"]["video_title"] is None
+    assert res["result"]["summary"]  # 본문은 유지
 
 
 @pytest.mark.asyncio
