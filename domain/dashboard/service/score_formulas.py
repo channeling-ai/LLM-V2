@@ -135,14 +135,12 @@ def retention_score(cur: WindowSum, base: WindowSum) -> Optional[int]:
 # ── ④ 반응 밀도 (engagement) ─────────────────────────────────────────────
 
 def engagement_score(cur: WindowSum, base: WindowSum) -> Optional[int]:
-    """ER = (likes+comments+shares)/views 비교. views<100이면 신뢰도 부족 → None."""
+    """ER = (likes+comments+shares)/views 비교."""
     if cur.day_count <= 0:
         return None
-    if cur.views < 100:
+    if cur.views == 0 or base.views == 0:
         return None
     er_c = (cur.likes + cur.comments + cur.shares) / cur.views
-    if base.views == 0:
-        return None
     er_b = (base.likes + base.comments + base.shares) / base.views
     return _normalize(er_c, er_b)
 
