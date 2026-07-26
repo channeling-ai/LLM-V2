@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import time
 from datetime import datetime
 from typing import List, Dict, Any
@@ -443,19 +444,43 @@ class RagServiceImpl(RagService):
             clean_json_str = result_str.strip().replace("```json", "").replace("```", "")
             result = json.loads(clean_json_str)
 
-            # raw_trends의 started_at을 LLM 결과 키워드에 역매칭
+            # raw_trends의 started_at·score를 LLM 결과 키워드에 역매칭
+            # score는 LLM 주관 판단이 아니라 Google Trends increase_percentage로 Python에서 계산
             started_at_map = {t.get("keyword", ""): t.get("started_at") for t in raw_trends}
+            volume_map = {t.get("keyword", ""): t.get("search_volume", 0) for t in raw_trends}
             for trend in result.get("trends", []):
                 kw = trend.get("keyword", "")
                 started_at = started_at_map.get(kw)
                 if started_at is None:
                     logger.warning(f"started_at 역매칭 실패 — LLM 키워드가 원본과 다를 수 있음: '{kw}'")
                 trend["started_at"] = started_at
+                trend["score"] = self._calculate_trend_score(volume_map.get(kw, 0))
 
             return result
         except json.JSONDecodeError:
             logger.error(f"실시간 트렌드 LLM 응답 JSON 파싱 실패 - 원본 응답: {result_str}")
             return {"error": "결과 파싱 오류", "raw_result": result_str}
+
+    @staticmethod
+    def _calculate_trend_score(search_volume) -> int:
+        """
+        Google Trends 검색량(search_volume)을 0~100 점수로 변환.
+        LLM 주관 판단 대신 객관적 데이터로 일관된 score를 산출한다.
+        (increase_percentage는 트렌딩 항목이 모두 1000으로 버킷팅돼 변별력이 없어
+         실제로 분산되는 search_volume을 로그 스케일로 매핑)
+        """
+        try:
+            volume = float(search_volume)
+        except (ValueError, TypeError):
+            return 0
+
+        if volume <= 0:
+            return 0
+
+        # 검색량은 로그 정규 분포에 가까우므로 log10 선형 매핑.
+        # log10=3(1천) → 0점, log10=5.5(약 316천) → 100점.
+        score = (math.log10(volume) - 3) * 40
+        return round(min(100, max(0, score)))
 
 
 
