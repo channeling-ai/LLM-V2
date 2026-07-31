@@ -81,9 +81,9 @@ class RagServiceImpl(RagService):
             return [{"index": c["index"], "emotion": 3} for c in comments]
 
     async def summarize_comment_categories(self, classified_comments: Dict[str, List[str]]) -> Dict[str, str]:
-        """4개 카테고리 한줄 요약 - 1회 LLM 호출"""
+        """4개 카테고리 요약 - 1회 LLM 호출"""
         context = json.dumps(classified_comments, ensure_ascii=False)
-        query = "각 카테고리 댓글들의 핵심 반응을 한줄로 요약해주세요."
+        query = "각 카테고리 댓글들의 핵심 반응과 반복 등장한 표현을 두 문장으로 요약해주세요."
         result = await self.execute_llm_chain(context, query, PromptTemplateManager.get_category_summary_prompt())
 
         try:

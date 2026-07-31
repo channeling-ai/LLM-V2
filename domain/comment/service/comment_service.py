@@ -123,6 +123,7 @@ class CommentService:
                     "category": category,
                     "content": c["content"],
                     "author": c.get("author", ""),
+                    "author_profile_image_url": c.get("author_profile_image_url", ""),
                     "published_at": c.get("published_at", ""),
                     "like_count": c.get("like_count", 0),
                 })

@@ -100,6 +100,7 @@ class RepresentativeComment(BaseModel):
     category: str
     content: str
     author: str
+    author_profile_image_url: str = ""
     published_at: str
     like_count: int
 
