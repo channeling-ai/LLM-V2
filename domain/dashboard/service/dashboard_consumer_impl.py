@@ -8,6 +8,9 @@
 BaseConsumer는 예외를 삼키고 offset을 커밋(재처리 없음)하므로 핸들러가 자급자족한다:
   - suggestion은 2~3회 backoff 재시도, 소진 시 is_success=False 발행(테이블 미변경)
   - 점수는 이미 발행돼 영향 없음 → 다음날 로그인 게이트로 자연 복구
+
+결과는 channel_id를 메시지 키로 발행한다. Spring이 scores/suggestions를 같은
+channel_dashboard 행에 병합하므로, 같은 파티션으로 보내 한 컨슈머가 순서대로 처리하게 한다.
 """
 
 import asyncio
@@ -29,6 +32,7 @@ from core.kafka.dto.dashboard_message import (
     ScoreItem,
 )
 from core.kafka.kafka_broker import kafka_broker
+from core.kafka.message_key import to_message_key
 from domain.channel.repository.channel_repository import ChannelRepository
 from domain.dashboard.service import raw_metrics_collector
 from domain.dashboard.service.score_calculation import (
@@ -147,6 +151,7 @@ class DashboardConsumerImpl(BaseConsumer):
                         result=payload.model_dump(by_alias=True),
                     ),
                     topic=kafka_config.dashboard_result_v3,
+                    key=to_message_key(channel_id),
                 )
                 logger.info("[Dashboard] ✅ suggestions 발행 완료 - channel_id=%s, 개수=%d (전체 %.2f초)",
                             channel_id, len(items), time.time() - start_time)
@@ -209,6 +214,7 @@ class DashboardConsumerImpl(BaseConsumer):
                 result=payload.model_dump(by_alias=True),
             ),
             topic=kafka_config.dashboard_result_v3,
+            key=to_message_key(channel_id),
         )
 
     async def _publish_failure(self, channel_id, dashboard_date_str, step: DashboardStep):
@@ -221,6 +227,7 @@ class DashboardConsumerImpl(BaseConsumer):
                     dashboard_date=dashboard_date_str,
                 ),
                 topic=kafka_config.dashboard_result_v3,
+                key=to_message_key(channel_id),
             )
         except Exception as e:
             logger.error("[Dashboard] 실패 메시지 발행 실패 - channel_id=%s, step=%s: %r",

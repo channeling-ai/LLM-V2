@@ -26,6 +26,7 @@ from core.kafka.dto.producer_message import (
     RecommendMessage,
 )
 from core.kafka.kafka_broker import kafka_broker
+from core.kafka.message_key import to_message_key
 from domain.channel.repository.channel_repository import ChannelRepository
 from domain.comment.service.comment_service import CommentService
 from domain.content_chunk.repository.content_chunk_repository import ContentChunkRepository
@@ -180,6 +181,7 @@ class ReportConsumerImplV2(ReportConsumer):
                     ),
                 ),
                 topic=kafka_config.report_result_v3,
+                key=to_message_key(report_id),
             )
             logger.info("[V2] Overview 결과 발행 완료 (%.2f초)", time.time() - start_time)
 
@@ -193,6 +195,7 @@ class ReportConsumerImplV2(ReportConsumer):
                     step=Step.overview,
                 ),
                 topic=kafka_config.report_result_v3,
+                key=to_message_key(report_id),
             )
         finally:
             logger.info("[V2] handle_overview 전체 처리 시간: %.3f초", time.time() - start_time)
@@ -284,6 +287,7 @@ class ReportConsumerImplV2(ReportConsumer):
                     result=analysis_result.model_dump(by_alias=True),
                 ),
                 topic=kafka_config.report_result_v3,
+                key=to_message_key(report.id),
             )
             logger.info(f"[V2] analysis Kafka 발행 완료: report_id={report.id}")
 
@@ -299,6 +303,7 @@ class ReportConsumerImplV2(ReportConsumer):
                         step=Step.analysis,
                     ),
                     topic=kafka_config.report_result_v3,
+                    key=to_message_key(report_id_raw),
                 )
             except Exception as pub_err:
                 logger.error(f"[V2] Kafka 실패 알림 발행 실패: {pub_err!r}")

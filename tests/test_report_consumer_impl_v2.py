@@ -99,7 +99,7 @@ async def _run_overview(consumer, msg=None):
     """kafka_broker를 가로채서 발행된 메시지 목록을 반환"""
     published = []
 
-    async def fake_publish(message, topic):
+    async def fake_publish(message, topic, key=None):
         published.append((message, topic))
 
     with patch("domain.report.service.report_consumer_impl_v2.kafka_broker") as mock_broker:
@@ -243,7 +243,7 @@ class TestHandleAnalysisV2:
 
         published = []
 
-        async def fake_publish(message, topic):
+        async def fake_publish(message, topic, key=None):
             published.append((message, topic))
 
         msg_input = {
@@ -273,7 +273,7 @@ class TestHandleAnalysisV2:
 
         published = []
 
-        async def fake_publish(message, topic):
+        async def fake_publish(message, topic, key=None):
             published.append((message, topic))
 
         msg_input = {
@@ -336,7 +336,7 @@ class TestHandleRecommendV2:
     async def _run(self, msg=None):
         published = []
 
-        async def fake_publish(message, topic):
+        async def fake_publish(message, topic, key=None):
             published.append((message, topic))
 
         with patch("domain.report.service.report_consumer_impl_v2.kafka_broker") as mock_broker:
@@ -401,3 +401,91 @@ class TestHandleRecommendV2:
         assert report_service.create_script_summary.await_args.kwargs["skip_vector_save"] is True
         report_service.analyze_optimization.assert_awaited_once()
         assert report_service.analyze_optimization.await_args.kwargs["skip_vector_save"] is True
+
+
+# ────────────────────────────────────────────────────────────
+# 결과 메시지 키 — 같은 report의 overview/analysis가 같은 파티션으로 가야 함
+# (Spring이 두 결과를 한 Report 행에 병합하므로 동시 처리되면 lost update)
+# ────────────────────────────────────────────────────────────
+
+async def _run_capturing_keys(handler, msg):
+    keys = []
+
+    async def fake_publish(message, topic, key=None):
+        keys.append((message.is_success, key))
+
+    with patch("domain.report.service.report_consumer_impl_v2.kafka_broker") as mock_broker:
+        mock_broker.publish = fake_publish
+        await handler(msg)
+
+    return keys
+
+
+class TestReportResultMessageKey:
+    def setup_method(self):
+        self.consumer = _make_consumer()
+
+    @pytest.mark.asyncio
+    async def test_overview_success_keyed_by_report_id(self):
+        _attach_mocks(self.consumer)
+        _attach_overview_mocks(self.consumer)
+
+        keys = await _run_capturing_keys(self.consumer.handle_overview_v2, BASE_OVERVIEW_MSG)
+
+        assert keys == [(True, b"10")]
+
+    @pytest.mark.asyncio
+    async def test_overview_failure_keyed_by_report_id(self):
+        self.consumer.report_repository = MagicMock()
+        self.consumer.report_repository.find_by_id = AsyncMock(return_value=None)
+
+        keys = await _run_capturing_keys(self.consumer.handle_overview_v2, BASE_OVERVIEW_MSG)
+
+        assert keys == [(False, b"10")]
+
+    @pytest.mark.asyncio
+    async def test_analysis_success_keyed_by_report_id(self):
+        _attach_mocks(self.consumer)
+        self.consumer.report_service = MagicMock()
+        self.consumer.report_service.analyze_viewer_retention = AsyncMock(return_value={
+            "criticalSection": {"startTime": "0:10", "endTime": "0:20", "duration": 10},
+            "retentionGraph": [], "causes": [],
+            "improvements": [], "expectedEffect": "",
+        })
+        self.consumer.report_service.analyze_optimization = AsyncMock(
+            return_value={"categoryList": [], "additionalSuggestions": []}
+        )
+        self.consumer.rag_service = MagicMock()
+        self.consumer.rag_service.generate_analysis_summary = AsyncMock(
+            return_value={"title": "", "content": ""}
+        )
+
+        keys = await _run_capturing_keys(
+            self.consumer.handle_analysis_v2, {"task_id": 2, "report_id": 10}
+        )
+
+        assert keys == [(True, b"10")]
+
+    @pytest.mark.asyncio
+    async def test_analysis_failure_keyed_by_report_id(self):
+        _attach_mocks(self.consumer)
+        self.consumer.report_service = MagicMock()
+        self.consumer.report_service.analyze_viewer_retention = AsyncMock(
+            side_effect=RuntimeError("분석 실패")
+        )
+
+        keys = await _run_capturing_keys(
+            self.consumer.handle_analysis_v2, {"task_id": 2, "report_id": 10}
+        )
+
+        assert keys == [(False, b"10")]
+
+    @pytest.mark.asyncio
+    async def test_recommend_result_has_no_key(self):
+        """추천 결과는 리포트당 1건이라 병합 경합이 없어 키를 붙이지 않음"""
+        self.consumer.recommend_generator = MagicMock()
+        self.consumer.recommend_generator.generate = AsyncMock(side_effect=RuntimeError("x"))
+
+        keys = await _run_capturing_keys(self.consumer.handle_recommend_v2, BASE_RECOMMEND_MSG)
+
+        assert keys == [(False, None)]
